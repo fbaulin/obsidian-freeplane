@@ -1,0 +1,133 @@
+.fp-view {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.fp-canvas {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: auto;
+  background: var(--background-primary);
+}
+
+.fp-svg {
+  display: block;
+}
+
+.fp-sidebar {
+  width: 340px;
+  min-width: 280px;
+  max-width: 480px;
+  border-left: 1px solid var(--background-modifier-border);
+  padding: 12px;
+  overflow-y: auto;
+  background: var(--background-primary);
+}
+
+.fp-sidebar label {
+  display: block;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
+.fp-sidebar input[type="text"],
+.fp-sidebar textarea {
+  width: 100%;
+}
+
+.fp-sidebar textarea {
+  min-height: 120px;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+
+.fp-sidebar button {
+  margin-top: 6px;
+}
+
+.fp-sidebar code {
+  display: block;
+  margin: 6px 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.fp-edges path {
+  fill: none;
+  stroke: var(--background-modifier-border);
+  stroke-width: 1.6;
+}
+
+.fp-node rect {
+  fill: var(--background-secondary);
+  stroke: var(--background-modifier-border);
+  stroke-width: 1.2;
+}
+
+.fp-node.selected rect {
+  stroke: var(--interactive-accent);
+  stroke-width: 2;
+}
+
+.fp-node text {
+  fill: var(--text-normal);
+  font-size: 13px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fp-node title {
+  pointer-events: none;
+}
+
+.fp-fold {
+  cursor: pointer;
+  fill: var(--background-secondary);
+  stroke: var(--text-muted);
+  stroke-width: 1.2;
+}
+
+.fp-fold-sign {
+  fill: var(--text-muted);
+  font-size: 11px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fp-inline-edit {
+  position: absolute;
+  z-index: 20;
+  font-size: 13px;
+  padding: 2px 6px;
+  border: 1px solid var(--interactive-accent);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border-radius: 4px;
+}
+
+.fp-drop {
+  pointer-events: none;
+}
+
+.fp-drop-child {
+  fill: var(--interactive-accent);
+  fill-opacity: 0.12;
+  stroke: var(--interactive-accent);
+  stroke-width: 2;
+  rx: 8;
+}
+
+.fp-drop-before,
+.fp-drop-after {
+  fill: var(--interactive-accent);
+  stroke: none;
+}
+
+.fp-dragging .fp-node {
+  cursor: grabbing;
+}

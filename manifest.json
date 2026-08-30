@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-freeplane",
+  "name": "Freeplane Mind Map",
+  "version": "0.1.0",
+  "minAppVersion": "1.6.5",
+  "description": "View and edit Freeplane .mm mind-map files inside Obsidian.",
+  "author": "Your Name",
+  "isDesktopOnly": false
+}
