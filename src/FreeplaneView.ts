@@ -1,4 +1,4 @@
-import { FileView, TFile, Notice, WorkspaceLeaf } from "obsidian";
+import { FileView, TFile, Notice, WorkspaceLeaf, Menu, MarkdownRenderer, Component } from "obsidian";
 import { SnapshotHistory } from "./history";
 import {
   parseMm,
@@ -12,6 +12,7 @@ import {
   moveNode
 } from "./mm/xml";
 import { layoutMap } from "./mm/layout";
+import { toMarkdown } from "./mm/md";
 import { renderMap } from "./mm/render";
 import { askUnsaved } from "./ui/UnsavedPrompt";
 
@@ -30,6 +31,13 @@ export class FreeplaneView extends FileView {
 
   layout: any = null;
   selectedId: string | null = null;
+  lastRichClick: any = null;
+  zoom = 1;
+  mdSizes: Record<string, { w: number; h: number }> = {};
+  mdComponent: any = null;
+  mdPass = 0;
+  richExpanded = new Set<string>();
+  sidebarHidden = false;
 
   canvasEl: HTMLElement;
   svg: SVGSVGElement;
@@ -71,26 +79,65 @@ export class FreeplaneView extends FileView {
     // ----- critical input listeners first -----
     this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
       if (this.app.workspace.activeLeaf !== this.leaf) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.key.toLowerCase() !== "z") return;
-      if (this.isEditableTarget(e.target)) return;
-      e.preventDefault();
-      if (e.shiftKey) this.redo();
-      else this.undo();
+      this.handleKeydown(e);
     });
 
-    // capture-phase Mod+S: runs before Obsidian's global hotkey dispatcher
+    // capture-phase shortcuts: run before Obsidian's global hotkey dispatcher
     this.registerDomEvent(window, "keydown", (e: KeyboardEvent) => {
       if (this.app.workspace.activeLeaf !== this.leaf) return;
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+      if (this.isEditableTarget(e.target)) return;
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "s") {
         e.preventDefault();
         e.stopPropagation();
         this.save();
+      } else if (k === "e") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.selectedId) this.startTextEdit(this.selectedId);
+      } else if (k === "d") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.selectedId) this.startRichEdit(this.selectedId, "DETAILS");
+      } else if (k === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.selectedId) this.toggleRichPreview(this.selectedId);
       }
     }, true);
 
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onDragMove(e));
     this.registerDomEvent(document, "pointerup", (e: PointerEvent) => this.onDragEnd(e));
+    this.registerDomEvent(this.canvasEl, "wheel", (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const step = e.deltaY > 0 ? -0.1 : 0.1;
+      const newZoom = Math.min(3, Math.max(0.3, Math.round((this.zoom + step) * 100) / 100));
+      if (newZoom === this.zoom) return;
+      this.zoomAt(newZoom, e);
+    }, { passive: false } as any);
+
+    this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
+      if (this.isEditableTarget(e.target)) return;
+      const t = e.target as Element;
+
+      const link = t.closest ? t.closest("a.internal-link, a.external-link") : null;
+      if (link) {
+        e.preventDefault();
+        e.stopPropagation();
+        const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+        if (href) this.app.workspace.openLinkText(href, this.file?.path || "", false);
+        return;
+      }
+
+      if (t.closest && t.closest(".fp-node")) return;
+      if (this.selectedId) {
+        this.selectedId = null;
+        this.renderAll();
+      }
+    });
+
     console.log("Freeplane: onOpen listeners registered");
 
     this.registerEvent(
@@ -112,6 +159,7 @@ export class FreeplaneView extends FileView {
       this.addAction("save", "Save map", () => { this.save(); });
       this.addAction("undo-2", "Undo", () => { this.undo(); });
       this.addAction("redo-2", "Redo", () => { this.redo(); });
+      this.addAction("panel-right", "Toggle side panel", () => { this.toggleSidebar(); });
     } catch (e) { console.error("Freeplane: addAction failed", e); }
     try { this.initSaveHotkey(); } catch (e) { console.error("Freeplane: initSaveHotkey failed", e); }
 
@@ -243,60 +291,641 @@ export class FreeplaneView extends FileView {
     this.contentEl.createEl("p", { text: "The file was not modified." });
   }
 
+  async renderMarkdownPass() {
+    const divs = Array.from(this.svg.querySelectorAll(".fp-md")) as HTMLElement[];
+    if (divs.length === 0) return;
+
+    const token = ++this.mdPass;
+    const comp = new Component();
+    try { this.addChild(comp); } catch {}
+
+    const source = this.file?.path || "";
+
+    await Promise.all(divs.map(async (div) => {
+      const id = div.getAttribute("data-id") || "";
+      const n = this.layout?.byId?.[id];
+      if (!n) return;
+      div.innerHTML = "";
+      try {
+        await (MarkdownRenderer as any).render(this.app, toMarkdown(n.text), div, source, comp);
+      } catch {
+        div.textContent = n.text;
+      }
+    }));
+
+    if (token !== this.mdPass) return;
+
+    const old = this.mdComponent;
+    this.mdComponent = comp;
+    if (old && old !== comp) { try { this.removeChild(old); } catch {} }
+
+    if (this.measureMd(token)) this.renderAll();
+    else window.setTimeout(() => {
+      if (token === this.mdPass && this.measureMd(token)) this.renderAll();
+    }, 700);
+  }
+
+  measureMd(token: number): boolean {
+    if (token !== this.mdPass) return false;
+    const divs = Array.from(this.svg.querySelectorAll(".fp-md")) as HTMLElement[];
+    let changed = false;
+    for (const div of divs) {
+      const id = div.getAttribute("data-id") || "";
+      const w = Math.max(60, Math.ceil(div.scrollWidth) + 2);
+      const h = Math.max(30, Math.ceil(div.scrollHeight) + 2);
+      const used = this.mdSizes[id];
+      if (!used || Math.abs(used.w - w) > 2 || Math.abs(used.h - h) > 2) {
+        this.mdSizes[id] = { w, h };
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  zoomAt(newZoom: number, e?: WheelEvent) {
+    if (!this.svg || !this.layout) {
+      this.zoom = newZoom;
+      this.applyZoom();
+      return;
+    }
+
+    // anchor: selected node center, else the mouse cursor
+    let u: { x: number; y: number } | null = null;
+
+    if (this.selectedId) {
+      const n = this.layout.byId[this.selectedId];
+      if (n) u = { x: n.x + n.width / 2, y: n.y + n.titleHeight / 2 };
+    }
+
+    if (!u && e) {
+      u = clientToSvg(this.svg, e.clientX, e.clientY);
+    }
+
+    let before: { x: number; y: number } | null = null;
+    const c = this.canvasEl.getBoundingClientRect();
+
+    if (u) {
+      const pt = this.svg.createSVGPoint();
+      pt.x = u.x;
+      pt.y = u.y;
+      const ctm = this.svg.getScreenCTM();
+      if (ctm) {
+        const sp = pt.matrixTransform(ctm);
+        before = { x: sp.x - c.left, y: sp.y - c.top };
+      }
+    }
+
+    this.zoom = newZoom;
+    this.applyZoom();
+
+    if (u && before) {
+      const pt = this.svg.createSVGPoint();
+      pt.x = u.x;
+      pt.y = u.y;
+      const ctm2 = this.svg.getScreenCTM();
+      const c2 = this.canvasEl.getBoundingClientRect();
+      if (ctm2) {
+        const sp = pt.matrixTransform(ctm2);
+        const after = { x: sp.x - c2.left, y: sp.y - c2.top };
+        this.canvasEl.scrollLeft += after.x - before.x;
+        this.canvasEl.scrollTop += after.y - before.y;
+      }
+    }
+  }
+
+  applyZoom() {
+    if (!this.svg || !this.layout) return;
+    this.svg.setAttribute("width", String(Math.round(this.layout.width * this.zoom)));
+    this.svg.setAttribute("height", String(Math.round(this.layout.height * this.zoom)));
+  }
+
   renderAll() {
     if (!this.doc || !this.svg) return;
-    this.layout = layoutMap(this.doc);
+
+    this.layout = layoutMap(this.doc, this.richExpanded, this.mdSizes);
+
     renderMap(this.svg, this.layout, this.selectedId, {
-      select: (id: string) => { this.selectedId = id; this.renderAll(); },
+      select: (id: string) => {
+        if (this.selectedId !== id) {
+          this.selectedId = id;
+          this.renderAll();
+        }
+      },
       toggleFold: (id: string) => this.toggleFold(id),
+      toggleRich: (id: string) => this.toggleRichPreview(id),
       startDrag: (id: string, e: PointerEvent) => this.startDrag(id, e),
-      editText: (id: string) => this.startTextEdit(id)
+      editText: (id: string) => this.startTextEdit(id),
+      editRich: (id: string, type: "DETAILS" | "NOTE") => this.startRichEdit(id, type),
+      richClick: (id: string, type: "DETAILS" | "NOTE") => this.richLineClicked(id, type),
+      contextMenu: (id: string, e: MouseEvent) => this.openNodeMenu(id, e)
     });
+
+    this.applyZoom();
+    this.renderMarkdownPass();
     this.renderSidebar();
     (this.leaf as any).updateHeader?.();
   }
 
   renderSidebar() {
     this.sidebarEl.empty();
+
     if (!this.doc) return;
 
     if (!this.selectedId) {
-      this.sidebarEl.createEl("p", { text: "Select a node. Double-click to edit its text. Drag nodes to move them." });
-      this.sidebarEl.createEl("p", { text: "Ctrl+S saves. Ctrl+Z / Ctrl+Shift+Z undo/redo." });
+      this.sidebarEl.createEl("p", {
+        text: "Select a node. Double-click to edit its text. Drag nodes to move them."
+      });
+      this.sidebarEl.createEl("p", {
+        text: "Hotkeys: arrows navigate, Ctrl+arrows move, Ctrl+E rename, Ctrl+D details, Ctrl+Space preview, Space fold, Enter sibling, Insert child."
+      });
       return;
     }
 
     const el = nodeById(this.doc, this.selectedId);
-    if (!el) { this.selectedId = null; this.renderSidebar(); return; }
+
+    if (!el) {
+      this.selectedId = null;
+      this.renderSidebar();
+      return;
+    }
 
     this.sidebarEl.createEl("h3", { text: "Node" });
+
     const idEl = this.sidebarEl.createEl("code");
     idEl.textContent = "ID: " + (el.getAttribute("ID") || "(none)");
 
     this.sidebarEl.createEl("label", { text: "Text" });
     const textInput = this.sidebarEl.createEl("input", { type: "text" });
+    this.attachSuggest(textInput);
     textInput.value = el.getAttribute("TEXT") || "";
-    textInput.addEventListener("change", () => {
-      if (this.selectedId) this.updateNodeText(this.selectedId, textInput.value);
-    });
 
-    this.sidebarEl.createEl("label", { text: "DETAILS richcontent (plain lines or XHTML)" });
+    this.sidebarEl.createEl("label", {
+      text: "DETAILS richcontent"
+    });
     const details = this.sidebarEl.createEl("textarea");
+    this.attachSuggest(details);
     details.value = richContentSource(el, "DETAILS");
-    const applyDetails = this.sidebarEl.createEl("button", { text: "Apply details" });
-    applyDetails.addEventListener("click", () => {
-      try { this.applyRichContent("DETAILS", details.value); new Notice("Details updated."); }
-      catch (e: any) { new Notice("Details not applied: " + (e?.message || String(e))); }
+
+    this.sidebarEl.createEl("label", {
+      text: "NOTE richcontent"
+    });
+    const note = this.sidebarEl.createEl("textarea");
+    this.attachSuggest(note);
+    note.value = richContentSource(el, "NOTE");
+
+    const update = this.sidebarEl.createEl("button", {
+      text: "Update node",
+      cls: "mod-cta"
     });
 
-    this.sidebarEl.createEl("label", { text: "NOTE richcontent (plain lines or XHTML)" });
-    const note = this.sidebarEl.createEl("textarea");
-    note.value = richContentSource(el, "NOTE");
-    const applyNote = this.sidebarEl.createEl("button", { text: "Apply note" });
-    applyNote.addEventListener("click", () => {
-      try { this.applyRichContent("NOTE", note.value); new Notice("Note updated."); }
-      catch (e: any) { new Notice("Note not applied: " + (e?.message || String(e))); }
+    update.addEventListener("click", () => {
+      try {
+        this.updateWholeNode(
+          this.selectedId!,
+          textInput.value,
+          details.value,
+          note.value
+        );
+        new Notice("Node updated.");
+      } catch (e: any) {
+        new Notice("Node not updated: " + (e?.message || String(e)));
+      }
     });
+  }
+
+  richLineClicked(id: string, type: "DETAILS" | "NOTE") {
+    const now = Date.now();
+    const last = this.lastRichClick;
+    if (last && last.id === id && last.type === type && now - last.time < 450) {
+      this.lastRichClick = null;
+      this.startRichEdit(id, type);
+    } else {
+      this.lastRichClick = { id, type, time: now };
+    }
+  }
+
+  selectSiblingNav(dir: -1 | 1) {
+    if (!this.doc || !this.selectedId) return;
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el || !el.parentElement) return;
+    const siblings = this.nodeChildren(el.parentElement);
+    if (siblings.length === 0) return;
+    const idx = siblings.indexOf(el);
+    const next = (idx + dir + siblings.length) % siblings.length;
+    const id = siblings[next].getAttribute("ID");
+    if (id) { this.selectedId = id; this.renderAll(); }
+  }
+
+  selectParentNav() {
+    if (!this.doc || !this.selectedId) return;
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el) return;
+    const parent = el.parentElement;
+    if (!parent || parent.nodeName.toLowerCase() !== "node") return;
+    const id = parent.getAttribute("ID");
+    if (id) { this.selectedId = id; this.renderAll(); }
+  }
+
+  selectFirstChildNav() {
+    if (!this.doc || !this.selectedId) return;
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el) return;
+
+    const before = serializeDoc(this.doc);
+    let changed = false;
+
+    // open the node we leave so the child is visible
+    if (el.getAttribute("FOLDED") === "true") { el.removeAttribute("FOLDED"); changed = true; }
+
+    const first = this.nodeChildren(el)[0];
+    if (!first) return;
+
+    // open the node we enter
+    if (first.getAttribute("FOLDED") === "true") { first.removeAttribute("FOLDED"); changed = true; }
+
+    this.selectedId = first.getAttribute("ID");
+    if (changed) this.commit(before);
+    else this.renderAll();
+  }
+
+  openNodeMenu(id: string, e: MouseEvent) {
+    if (this.selectedId !== id) {
+      this.selectedId = id;
+      this.renderAll();
+    }
+
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle("Rename").onClick(() => this.startTextEdit(id)));
+    menu.addItem((item) => item.setTitle("Edit details").onClick(() => this.startRichEdit(id, "DETAILS")));
+    menu.addItem((item) => item.setTitle("Edit note").onClick(() => this.startRichEdit(id, "NOTE")));
+    menu.addItem((item) => item.setTitle("Delete").onClick(() => this.deleteNode(id)));
+    menu.addItem((item) => item.setTitle("Collapse all").onClick(() => this.collapseChildren(id)));
+    menu.addItem((item) => item.setTitle("Expand all").onClick(() => this.expandAll(id)));
+    menu.showAtMouseEvent(e);
+  }
+
+  deleteNode(id: string) {
+    if (!this.doc || !id) return;
+    const el = nodeById(this.doc, id);
+    if (!el) return;
+
+    const parent = el.parentElement;
+    // protect the root node
+    if (!parent || parent.nodeName.toLowerCase() !== "node") return;
+
+    const before = serializeDoc(this.doc);
+    if (this.selectedId === id) {
+      this.selectedId = parent.getAttribute("ID");
+    }
+    el.remove();
+    this.commit(before);
+  }
+
+  collapseChildren(id: string) {
+    this.setFoldRecursive(id, true);
+  }
+
+  expandAll(id: string) {
+    this.setFoldRecursive(id, false);
+  }
+
+  setFoldRecursive(id: string, folded: boolean) {
+    if (!this.doc || !id) return;
+    const el = nodeById(this.doc, id);
+    if (!el) return;
+
+    const before = serializeDoc(this.doc);
+    const targets = [el, ...Array.from(el.querySelectorAll("node"))];
+    let changed = false;
+
+    for (const t of targets) {
+      const has = t.getAttribute("FOLDED") === "true";
+      if (folded && !has) {
+        if (this.nodeChildren(t).length > 0) {
+          t.setAttribute("FOLDED", "true");
+          changed = true;
+        }
+      } else if (!folded && has) {
+        t.removeAttribute("FOLDED");
+        changed = true;
+      }
+    }
+
+    if (changed) this.commit(before);
+  }
+
+  toggleSidebar(forceHidden?: boolean) {
+    this.sidebarHidden =
+      typeof forceHidden === "boolean" ? forceHidden : !this.sidebarHidden;
+
+    if (this.sidebarEl) {
+      this.sidebarEl.style.display = this.sidebarHidden ? "none" : "";
+    }
+
+  }
+
+  toggleRichPreview(id: string) {
+    if (this.richExpanded.has(id)) this.richExpanded.delete(id);
+    else this.richExpanded.add(id);
+    this.selectedId = id;
+    this.renderAll();
+  }
+
+  updateWholeNode(id: string, text: string, details: string, note: string) {
+    if (!this.doc) return;
+
+    const el = nodeById(this.doc, id);
+    if (!el) return;
+
+    const before = serializeDoc(this.doc);
+
+    setText(el, text);
+    setRichContent(this.doc, el, "DETAILS", details);
+    setRichContent(this.doc, el, "NOTE", note);
+
+    this.commit(before);
+  }
+
+  updateRichContent(id: string, type: "DETAILS" | "NOTE", source: string) {
+    if (!this.doc) return;
+
+    const el = nodeById(this.doc, id);
+    if (!el) return;
+
+    const before = serializeDoc(this.doc);
+    setRichContent(this.doc, el, type, source);
+    this.commit(before);
+  }
+
+  handleKeydown(e: KeyboardEvent) {
+    const key = e.key;
+    const mod = e.ctrlKey || e.metaKey;
+
+    if (mod && key.toLowerCase() === "z") {
+      if (this.isEditableTarget(e.target)) return;
+      e.preventDefault();
+      if (e.shiftKey) this.redo();
+      else this.undo();
+      return;
+    }
+
+    if (this.isEditableTarget(e.target)) return;
+
+    if (!this.selectedId) return;
+
+    if (key === " ") {
+      e.preventDefault();
+      this.toggleFold(this.selectedId);
+      return;
+    }
+
+    if (mod && key === "ArrowUp") {
+      e.preventDefault();
+      this.moveSelectedSibling(-1);
+      return;
+    }
+
+    if (mod && key === "ArrowDown") {
+      e.preventDefault();
+      this.moveSelectedSibling(1);
+      return;
+    }
+
+    if (mod && key === "ArrowLeft") {
+      e.preventDefault();
+      this.promoteSelected();
+      return;
+    }
+
+    if (mod && key === "ArrowRight") {
+      e.preventDefault();
+      this.demoteSelected();
+      return;
+    }
+
+    if (key === "ArrowUp") {
+      e.preventDefault();
+      this.selectSiblingNav(-1);
+      return;
+    }
+
+    if (key === "ArrowDown") {
+      e.preventDefault();
+      this.selectSiblingNav(1);
+      return;
+    }
+
+    if (key === "ArrowLeft") {
+      e.preventDefault();
+      this.selectParentNav();
+      return;
+    }
+
+    if (key === "ArrowRight") {
+      e.preventDefault();
+      this.selectFirstChildNav();
+      return;
+    }
+
+    if (key === "Enter") {
+      e.preventDefault();
+      this.createSiblingAfterSelected();
+      return;
+    }
+
+    if (key === "Insert") {
+      e.preventDefault();
+      this.createChildOfSelected();
+      return;
+    }
+
+    if (key === "Delete") {
+      e.preventDefault();
+      this.deleteNode(this.selectedId);
+      return;
+    }
+  }
+
+  createMmNode(text = ""): Element | null {
+    if (!this.doc) return null;
+
+    const el = this.doc.createElement("node");
+    const now = String(Date.now());
+
+    if (text) el.setAttribute("TEXT", text);
+    el.setAttribute("ID", this.generateNodeId());
+    el.setAttribute("CREATED", now);
+    el.setAttribute("MODIFIED", now);
+
+    return el;
+  }
+
+  generateNodeId(): string {
+    if (!this.doc) return "ID_" + Math.random().toString(36).slice(2, 10);
+
+    const existing = new Set<string>();
+
+    this.doc.querySelectorAll("node[ID]").forEach((n) => {
+      const id = n.getAttribute("ID");
+      if (id) existing.add(id);
+    });
+
+    let id = "";
+
+    do {
+      id = "ID_" + Math.floor(Math.random() * 1000000000);
+    } while (existing.has(id));
+
+    return id;
+  }
+
+  nodeChildren(el: Element): Element[] {
+    return Array.from(el.children).filter(
+      (c) => c.nodeName.toLowerCase() === "node"
+    );
+  }
+
+  nextNodeSibling(el: Element): Element | null {
+    let n = el.nextElementSibling;
+
+    while (n && n.nodeName.toLowerCase() !== "node") {
+      n = n.nextElementSibling;
+    }
+
+    return n;
+  }
+
+  prevNodeSibling(el: Element): Element | null {
+    let n = el.previousElementSibling;
+
+    while (n && n.nodeName.toLowerCase() !== "node") {
+      n = n.previousElementSibling;
+    }
+
+    return n;
+  }
+
+  moveSelectedSibling(dir: -1 | 1) {
+    if (!this.doc || !this.selectedId) return;
+
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el || !el.parentElement) return;
+
+    const parent = el.parentElement;
+    const siblings = this.nodeChildren(parent);
+    const idx = siblings.indexOf(el);
+
+    if (idx < 0 || siblings.length < 2) return;
+
+    const before = serializeDoc(this.doc);
+
+    if (dir < 0) {
+      if (idx === 0) {
+        const last = siblings[siblings.length - 1];
+        parent.insertBefore(el, this.nextNodeSibling(last));
+      } else {
+        parent.insertBefore(el, siblings[idx - 1]);
+      }
+    } else {
+      if (idx === siblings.length - 1) {
+        parent.insertBefore(el, siblings[0]);
+      } else {
+        parent.insertBefore(el, this.nextNodeSibling(siblings[idx + 1]));
+      }
+    }
+
+    this.commit(before);
+  }
+
+  promoteSelected() {
+    if (!this.doc || !this.selectedId) return;
+
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el) return;
+
+    const parent = el.parentElement;
+    if (!parent || parent.nodeName.toLowerCase() !== "node") return;
+
+    const grand = parent.parentElement;
+
+    // Do not create multiple <map><node> roots.
+    if (!grand || grand.nodeName.toLowerCase() === "map") return;
+
+    const before = serializeDoc(this.doc);
+    grand.insertBefore(el, this.nextNodeSibling(parent));
+    el.removeAttribute("POSITION");
+    this.commit(before);
+  }
+
+  demoteSelected() {
+    if (!this.doc || !this.selectedId) return;
+
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el) return;
+
+    const prev = this.prevNodeSibling(el);
+    if (!prev) return;
+
+    const before = serializeDoc(this.doc);
+
+    prev.appendChild(el);
+    prev.removeAttribute("FOLDED");
+    el.removeAttribute("POSITION");
+
+    this.commit(before);
+  }
+
+  createSiblingAfterSelected() {
+    if (!this.doc || !this.selectedId) return;
+
+    const current = nodeById(this.doc, this.selectedId);
+    if (!current || !current.parentElement) return;
+
+    const parent = current.parentElement;
+    if (parent.nodeName.toLowerCase() === "map") return;
+
+    const node = this.createMmNode();
+    if (!node) return;
+
+    if (parent.parentElement?.nodeName.toLowerCase() === "map") {
+      node.setAttribute("POSITION", current.getAttribute("POSITION") || "right");
+    }
+
+    const before = serializeDoc(this.doc);
+    parent.insertBefore(node, this.nextNodeSibling(current));
+
+    this.selectedId = node.getAttribute("ID");
+    this.commit(before);
+
+    window.setTimeout(() => {
+      if (this.selectedId) this.startTextEdit(this.selectedId);
+    }, 0);
+  }
+
+  createChildOfSelected() {
+    if (!this.doc || !this.selectedId) return;
+
+    const current = nodeById(this.doc, this.selectedId);
+    if (!current) return;
+
+    const node = this.createMmNode();
+    if (!node) return;
+
+    if (current.parentElement?.nodeName.toLowerCase() === "map") {
+      node.setAttribute("POSITION", "right");
+    }
+
+    const before = serializeDoc(this.doc);
+
+    current.appendChild(node);
+    current.removeAttribute("FOLDED");
+
+    this.selectedId = node.getAttribute("ID");
+    this.commit(before);
+
+    window.setTimeout(() => {
+      if (this.selectedId) this.startTextEdit(this.selectedId);
+    }, 0);
   }
 
   updateNodeText(id: string, text: string) {
@@ -306,6 +935,7 @@ export class FreeplaneView extends FileView {
     if ((el.getAttribute("TEXT") || "") === text) return;
     const before = serializeDoc(this.doc);
     setText(el, text);
+    delete this.mdSizes[id];
     this.commit(before);
   }
 
@@ -501,6 +1131,7 @@ export class FreeplaneView extends FileView {
     const canvasBox = this.canvasEl.getBoundingClientRect();
 
     const input = this.canvasEl.createEl("input", { cls: "fp-inline-edit" }) as HTMLInputElement;
+    this.attachSuggest(input);
     input.value = n.text || "";
     input.style.left = (box.left - canvasBox.left + this.canvasEl.scrollLeft) + "px";
     input.style.top = (box.top - canvasBox.top + this.canvasEl.scrollTop) + "px";
@@ -530,13 +1161,238 @@ export class FreeplaneView extends FileView {
 
     this.canvasEl.appendChild(input);
     input.focus();
-    input.select();
+    const tl = input.value.length;
+    input.setSelectionRange(tl, tl);
+  }
+
+  startRichEdit(id: string, type: "DETAILS" | "NOTE") {
+    if (!this.doc) return;
+
+    const n = this.layout?.byId?.[id];
+    const el = nodeById(this.doc, id);
+    if (!n || !el) return;
+
+    const richEl = this.svg.querySelector(
+      '.fp-rich-line[data-id="' + cssEscape(id) + '"][data-type="' + type + '"], .fp-rich-label[data-id="' + cssEscape(id) + '"][data-type="' + type + '"]'
+    ) as SVGElement | null;
+
+    const box = richEl
+      ? richEl.getBoundingClientRect()
+      : this.svg.querySelector('.fp-node[data-id="' + cssEscape(id) + '"]')?.getBoundingClientRect();
+
+    if (!box) return;
+
+    const canvasBox = this.canvasEl.getBoundingClientRect();
+
+    const textarea = this.canvasEl.createEl("textarea", {
+      cls: "fp-inline-edit fp-inline-rich-edit"
+    }) as HTMLTextAreaElement;
+
+    this.attachSuggest(textarea);
+    textarea.value = richContentSource(el, type);
+
+    textarea.style.left = `${box.left - canvasBox.left + this.canvasEl.scrollLeft}px`;
+    textarea.style.top = `${box.top - canvasBox.top + this.canvasEl.scrollTop}px`;
+    textarea.style.width = `${Math.max(n.width, 320)}px`;
+    textarea.style.height = `120px`;
+
+    let done = false;
+
+    const commit = () => {
+      if (done) return;
+      done = true;
+      const value = textarea.value;
+      textarea.remove();
+      this.updateRichContent(id, type, value);
+    };
+
+    const cancel = () => {
+      if (done) return;
+      done = true;
+      textarea.remove();
+    };
+
+    textarea.addEventListener("keydown", (e: KeyboardEvent) => {
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancel();
+      }
+
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        commit();
+      }
+    });
+
+    textarea.addEventListener("blur", () => {
+      commit();
+    });
+
+    this.canvasEl.appendChild(textarea);
+    textarea.focus();
+    const tl2 = textarea.value.length;
+    textarea.setSelectionRange(tl2, tl2);
+  }
+
+  attachSuggest(input: any) {
+    new LinkSuggest(this, input);
   }
 
   isEditableTarget(target: EventTarget | null): boolean {
     if (!target) return false;
     const el = target as HTMLElement;
     return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
+  }
+}
+
+class LinkSuggest {
+  view: any;
+  input: any;
+  popup: HTMLElement | null = null;
+  items: any[] = [];
+  index = 0;
+  open = false;
+  matchStart = 0;
+  partialEnd = 0;
+  embed = false;
+  query = "";
+
+  constructor(view: any, input: any) {
+    this.view = view;
+    this.input = input;
+    input.addEventListener("keydown", (e: KeyboardEvent) => this.handleKey(e));
+    input.addEventListener("input", () => this.update());
+    input.addEventListener("blur", () => window.setTimeout(() => this.close(), 150));
+  }
+
+  handleKey(e: KeyboardEvent): boolean {
+    if (!this.open) return false;
+    if (e.key === "ArrowDown") { e.preventDefault(); e.stopImmediatePropagation(); this.move(1); return true; }
+    if (e.key === "ArrowUp") { e.preventDefault(); e.stopImmediatePropagation(); this.move(-1); return true; }
+    if (e.key === "Enter" || e.key === "Tab") {
+      if (this.items.length) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        this.accept(this.items[this.index]);
+        return true;
+      }
+      this.close();
+      return false;
+    }
+    if (e.key === "Escape") {
+      e.stopImmediatePropagation();
+      this.close();
+      return true;
+    }
+    return false;
+  }
+
+  move(d: number) {
+    if (!this.items.length) return;
+    this.index = (this.index + d + this.items.length) % this.items.length;
+    this.refreshSel();
+  }
+
+  refreshSel() {
+    if (!this.popup) return;
+    Array.from(this.popup.children).forEach((c, i) => {
+      (c as HTMLElement).toggleClass("selected", i === this.index);
+    });
+  }
+
+  update() {
+    const caret = this.input.selectionStart ?? this.input.value.length;
+    const upto = this.input.value.slice(0, caret);
+    const m = /(!?)\[\[([^\[\]]*)$/.exec(upto);
+    if (!m) { this.close(); return; }
+
+    this.embed = m[1] === "!";
+    this.matchStart = caret - m[0].length;
+    this.partialEnd = caret;
+    this.query = m[2];
+
+    this.buildList();
+    if (this.items.length) this.showPopup();
+    else this.close();
+  }
+
+  label(f: any): string {
+    return f.extension === "md" ? f.basename : f.name;
+  }
+
+  buildList() {
+    const q = this.query.toLowerCase();
+    const cur = this.view.file?.path;
+
+    let files: any[];
+    if (this.embed) {
+      files = this.view.app.vault.getAllLoadedFiles()
+        .filter((f: any) => f instanceof TFile && f.path !== cur);
+    } else {
+      files = this.view.app.vault.getMarkdownFiles()
+        .filter((f: any) => f.path !== cur);
+    }
+
+    const hits = files
+      .map((f) => ({ f, l: this.label(f) }))
+      .filter((x) => !q || x.l.toLowerCase().includes(q) || x.f.path.toLowerCase().includes(q));
+
+    hits.sort((a, b) => {
+      const as = a.l.toLowerCase().startsWith(q) ? 0 : 1;
+      const bs = b.l.toLowerCase().startsWith(q) ? 0 : 1;
+      if (as !== bs) return as - bs;
+      return a.l.length - b.l.length;
+    });
+
+    this.items = hits.slice(0, 8).map((x) => x.f);
+    this.index = 0;
+  }
+
+  showPopup() {
+    if (!this.popup) {
+      this.popup = document.body.createDiv({ cls: "fp-suggest" });
+    }
+    this.popup.empty();
+
+    const r = this.input.getBoundingClientRect();
+    this.popup.style.left = r.left + "px";
+    this.popup.style.top = r.bottom + 4 + "px";
+    this.popup.style.width = Math.max(r.width, 260) + "px";
+    this.popup.style.display = "block";
+
+    this.items.forEach((f, i) => {
+      const item = this.popup!.createDiv({ cls: "fp-suggest-item" + (i === this.index ? " selected" : "") });
+      item.createSpan({ text: this.label(f) });
+      if (f.parent && f.parent.path !== "/") {
+        item.createSpan({ cls: "fp-suggest-path", text: "  " + f.parent.path });
+      }
+      item.addEventListener("mouseenter", () => { this.index = i; this.refreshSel(); });
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.accept(f);
+      });
+    });
+
+    this.open = true;
+  }
+
+  accept(f: any) {
+    const insert = (this.embed ? "![[" : "[[") + this.label(f) + "]]";
+    const v = this.input.value;
+    const caret = this.input.selectionStart ?? this.partialEnd;
+    const nv = v.slice(0, this.matchStart) + insert + v.slice(caret);
+    this.input.value = nv;
+    const pos = this.matchStart + insert.length;
+    this.input.setSelectionRange(pos, pos);
+    this.input.focus();
+    this.close();
+  }
+
+  close() {
+    this.open = false;
+    if (this.popup) this.popup.style.display = "none";
   }
 }
 

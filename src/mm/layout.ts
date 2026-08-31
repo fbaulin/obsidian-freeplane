@@ -1,10 +1,17 @@
-import { childNodeElements } from "./xml";
+import { childNodeElements, richContentSource } from "./xml";
+import { needsMarkdown } from "./md";
 
 const NODE_H = 30;
 const H_GAP = 56;
 const V_GAP = 10;
+const RICH_FONT = 12;
+const RICH_LINE_H = 15;
+const RICH_MAX_CHARS = 60;
+const RICH_PAD_TOP = 8;
+const RICH_PAD_BOTTOM = 8;
 
-export function layoutMap(doc: Document) {
+export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?: Record<string, { w: number; h: number }>) {
+  const expanded = richExpandedIds || new Set<string>();
   const rootEl = childNodeElements(doc.documentElement)[0];
 
   const nodes: any[] = [];
@@ -28,8 +35,56 @@ export function layoutMap(doc: Document) {
     const folded = el.getAttribute("FOLDED") === "true";
     const visibleChildren = includeChildren && !folded ? actualChildren : [];
 
+    const id = el.getAttribute("ID") || "";
     const text = el.getAttribute("TEXT") || "";
-    const width = estimateWidth(text);
+
+    const details = richContentSource(el, "DETAILS").trim();
+    const note = richContentSource(el, "NOTE").trim();
+    const hasRich = !!details || !!note;
+    const richExpanded = hasRich && expanded.has(id);
+
+    const richBlocks: any[] = [];
+
+    if (richExpanded) {
+      if (details) {
+        richBlocks.push({
+          type: "DETAILS",
+          title: "DETAILS",
+          lines: wrapText(details, RICH_MAX_CHARS)
+        });
+      }
+
+      if (note) {
+        richBlocks.push({
+          type: "NOTE",
+          title: "NOTE",
+          lines: wrapText(note, RICH_MAX_CHARS)
+        });
+      }
+    }
+
+    const richLineCount = richBlocks.reduce(
+      (sum, block) => sum + 1 + block.lines.length,
+      0
+    );
+
+    const richHeight = richExpanded && richLineCount > 0
+      ? RICH_PAD_TOP + richLineCount * RICH_LINE_H + RICH_PAD_BOTTOM
+      : 0;
+
+    const isMarkdown = needsMarkdown(text);
+    const mdSize = isMarkdown ? (mdSizes || {})[id] || null : null;
+    const titleHeight = isMarkdown
+      ? Math.max(NODE_H, mdSize ? mdSize.h : 48)
+      : NODE_H;
+
+    const nodeHeight = titleHeight + richHeight;
+
+    const titleWidth = isMarkdown
+      ? (mdSize ? mdSize.w : 220)
+      : estimateWidth(text);
+    const richWidth = richExpanded ? RICH_MAX_CHARS * 6.4 + 34 : 0;
+    const width = Math.max(titleWidth, richWidth, 60);
 
     const children = visibleChildren.map((child) =>
       build(child, depth + 1, side, true)
@@ -39,16 +94,25 @@ export function layoutMap(doc: Document) {
       children.reduce((sum, child) => sum + child.subtreeH, 0) +
       Math.max(0, children.length - 1) * V_GAP;
 
-    const subtreeH = Math.max(NODE_H, childrenHeight);
+    const subtreeH = Math.max(nodeHeight, childrenHeight);
 
     const node = {
       el,
-      id: el.getAttribute("ID") || "",
+      id,
       text,
       depth,
       side,
       width,
-      height: NODE_H,
+      height: nodeHeight,
+      titleHeight,
+      isMarkdown,
+      richBlocks,
+      hasRich,
+      hasDetails: !!details,
+      hasNote: !!note,
+      richExpanded,
+      richFont: RICH_FONT,
+      richLineH: RICH_LINE_H,
       x: 0,
       y: 0,
       children,
@@ -64,7 +128,7 @@ export function layoutMap(doc: Document) {
   const root = build(rootEl, 0, "right", false);
 
   root.x = -root.width / 2;
-  root.y = -NODE_H / 2;
+  root.y = -root.height / 2;
 
   const topEls = root.folded ? [] : childNodeElements(rootEl);
 
@@ -79,13 +143,8 @@ export function layoutMap(doc: Document) {
     } else if (pos === "right") {
       rightEls.push(el);
     } else {
-      // Visual fallback only. We do not persist this unless a structural
-      // move makes this node a top-level node.
-      if (rightEls.length <= leftEls.length) {
-        rightEls.push(el);
-      } else {
-        leftEls.push(el);
-      }
+      if (rightEls.length <= leftEls.length) rightEls.push(el);
+      else leftEls.push(el);
     }
   });
 
@@ -122,11 +181,8 @@ export function layoutMap(doc: Document) {
   function place(node: any, anchorX: number, centerY: number, side: string) {
     node.side = side;
 
-    if (side === "right") {
-      node.x = anchorX;
-    } else {
-      node.x = anchorX - node.width;
-    }
+    if (side === "right") node.x = anchorX;
+    else node.x = anchorX - node.width;
 
     node.y = centerY - node.height / 2;
 
@@ -169,9 +225,9 @@ export function layoutMap(doc: Document) {
   let maxY = -Infinity;
 
   for (const n of nodes) {
-    minX = Math.min(minX, n.x);
+    minX = Math.min(minX, n.x - 26);
     minY = Math.min(minY, n.y);
-    maxX = Math.max(maxX, n.x + n.width);
+    maxX = Math.max(maxX, n.x + n.width + 26);
     maxY = Math.max(maxY, n.y + n.height);
   }
 
@@ -183,7 +239,6 @@ export function layoutMap(doc: Document) {
   }
 
   const pad = 80;
-
   const viewBox = [
     minX - pad,
     minY - pad,
@@ -206,4 +261,28 @@ function estimateWidth(text: string): number {
   const t = text || " ";
   const len = Math.min(t.length, 80);
   return Math.max(60, len * 7 + 30);
+}
+
+function wrapText(text: string, width: number): string[] {
+  const out: string[] = [];
+
+  for (const originalLine of String(text).replace(/\r\n/g, "\n").split("\n")) {
+    let line = originalLine;
+
+    if (line.length === 0) {
+      out.push("");
+      continue;
+    }
+
+    while (line.length > width) {
+      let cut = line.lastIndexOf(" ", width);
+      if (cut < 12) cut = width;
+      out.push(line.slice(0, cut));
+      line = line.slice(cut).trimStart();
+    }
+
+    out.push(line);
+  }
+
+  return out;
 }

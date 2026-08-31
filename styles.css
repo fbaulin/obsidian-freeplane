@@ -64,7 +64,7 @@
 }
 
 .fp-node rect {
-  fill: var(--background-secondary);
+  fill: #ffffff;
   stroke: var(--background-modifier-border);
   stroke-width: 1.2;
 }
@@ -88,7 +88,7 @@
 .fp-fold {
   cursor: pointer;
   fill: var(--background-secondary);
-  stroke: var(--text-muted);
+  stroke: var(--interactive-accent);
   stroke-width: 1.2;
 }
 
@@ -130,4 +130,129 @@
 
 .fp-dragging .fp-node {
   cursor: grabbing;
+}
+
+.fp-sidebar-top {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.fp-show-sidebar {
+  position: sticky;
+  top: 8px;
+  left: 8px;
+  z-index: 30;
+  margin: 8px;
+}
+
+.fp-rich-toggle {
+  cursor: pointer;
+  fill: var(--background-secondary);
+  stroke: var(--interactive-accent);
+  stroke-width: 1.2;
+}
+
+.fp-rich-sign {
+  fill: var(--text-muted);
+  font-size: 11px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fp-rich-label {
+  fill: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: text;
+}
+
+.fp-rich-line {
+  fill: var(--text-muted);
+  font-size: 12px;
+  cursor: text;
+  user-select: none;
+}
+
+.fp-inline-rich-edit {
+  font-family: var(--font-text);
+  white-space: pre-wrap;
+}
+
+.fp-rich-sep {
+  stroke: var(--background-modifier-border);
+  stroke-width: 1;
+}
+
+.fp-rich-edit {
+  cursor: pointer;
+  fill: var(--background-secondary);
+  stroke: var(--interactive-accent);
+  stroke-width: 1.2;
+}
+
+.fp-rich-edit-sign {
+  fill: var(--text-muted);
+  font-size: 10px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fp-fo {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-md {
+  box-sizing: border-box;
+  width: max-content;
+  max-width: none;
+  padding: 4px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text-normal);
+  pointer-events: auto;
+}
+
+.fp-md p {
+  margin: 0;
+}
+
+.fp-md .markdown-embed {
+  border: none;
+  padding: 0;
+}
+
+.fp-md .excalidraw-svg svg,
+.fp-md svg {
+  max-width: 100%;
+}
+
+.fp-suggest {
+  position: fixed;
+  z-index: 100;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.fp-suggest-item {
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fp-suggest-item.selected {
+  background: var(--background-modifier-hover);
+}
+
+.fp-suggest-path {
+  color: var(--text-faint);
+  font-size: 11px;
 }
