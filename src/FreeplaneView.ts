@@ -50,6 +50,8 @@ export class FreeplaneView extends FileView {
   dropHint: any = null;
   panning: any = null;
   suppressNextClick = false;
+  hoverLinkEl: any = null;
+  hoverPop: any = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: any) {
     super(leaf);
@@ -132,10 +134,12 @@ export class FreeplaneView extends FileView {
 
       const link = t.closest ? t.closest("a.internal-link, a.external-link, .fp-rich-link") : null;
       if (link) {
-        e.preventDefault();
-        e.stopPropagation();
-        const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
-        if (href) this.app.workspace.openLinkText(href, this.file?.path || "", false);
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+          if (href) this.app.workspace.openLinkText(href, this.file?.path || "", false);
+        }
         return;
       }
 
@@ -161,6 +165,7 @@ export class FreeplaneView extends FileView {
       const t = e.target as Element;
       if (t.closest && (t.closest(".fp-node") || t.closest(".fp-inline-edit") || t.closest("a"))) return;
       if (this.isEditableTarget(e.target)) return;
+      this.hidePreview();
       this.panning = {
         startX: e.clientX,
         startY: e.clientY,
@@ -186,6 +191,15 @@ export class FreeplaneView extends FileView {
       if (this.panning.moved) this.suppressNextClick = true;
       this.panning = null;
       this.canvasEl.removeClass("fp-panning");
+    });
+
+    this.registerDomEvent(this.canvasEl, "mouseover", (e: MouseEvent) => this.onLinkHoverOver(e));
+    this.registerDomEvent(this.canvasEl, "mouseout", (e: MouseEvent) => this.onLinkHoverOut(e));
+    this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
+      if (e.key === "Control" || e.key === "Meta") this.setCtrlPreview(true);
+    });
+    this.registerDomEvent(document, "keyup", (e: KeyboardEvent) => {
+      if (e.key === "Control" || e.key === "Meta") this.setCtrlPreview(false);
     });
 
     console.log("Freeplane: onOpen listeners registered");
@@ -447,6 +461,75 @@ export class FreeplaneView extends FileView {
     }
   }
 
+  onLinkHoverOver(e: MouseEvent) {
+    const t = e.target as Element;
+    const link = t.closest ? t.closest("a.internal-link, .fp-rich-link") : null;
+    if (link === this.hoverLinkEl) return;
+    this.hidePreview();
+    this.hoverLinkEl = link;
+    if (link && (e.ctrlKey || e.metaKey)) this.showPreview(link);
+  }
+
+  onLinkHoverOut(e: MouseEvent) {
+    const t = e.target as Element;
+    const link = t.closest ? t.closest("a.internal-link, .fp-rich-link") : null;
+    if (!link) return;
+    const to = e.relatedTarget as Element | null;
+    if (to && link.contains(to)) return;
+    this.hoverLinkEl = null;
+    this.hidePreview();
+  }
+
+  setCtrlPreview(on: boolean) {
+    if (on && this.hoverLinkEl) this.showPreview(this.hoverLinkEl);
+    else if (!on) this.hidePreview();
+  }
+
+  async showPreview(link: Element) {
+    this.hidePreview();
+    const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+    if (!href) return;
+    const target = (this.app.metadataCache as any).getFirstLinkpathDest(
+      href,
+      this.file?.path || ""
+    );
+    if (!target) return;
+
+    const el = document.body.createDiv({ cls: "fp-preview" });
+    const rect = link.getBoundingClientRect();
+    el.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 420)) + "px";
+    el.style.top = rect.bottom + 6 + "px";
+
+    const comp = new Component();
+    try { this.addChild(comp); } catch {}
+    this.hoverPop = { el, comp };
+
+    try {
+      if (target.extension === "md") {
+        const text = await this.app.vault.cachedRead(target);
+        await (MarkdownRenderer as any).render(this.app, text, el, target.path, comp);
+      } else {
+        await (MarkdownRenderer as any).render(
+          this.app,
+          "![[" + target.name + "]]",
+          el,
+          this.file?.path || "",
+          comp
+        );
+      }
+    } catch {
+      el.textContent = target.path;
+    }
+  }
+
+  hidePreview() {
+    if (!this.hoverPop) return;
+    const pop = this.hoverPop;
+    this.hoverPop = null;
+    try { this.removeChild(pop.comp); } catch {}
+    pop.el.remove();
+  }
+
   fitMap() {
     if (!this.layout || !this.canvasEl) return;
     const b = this.layout.bounds as number[];
@@ -645,11 +728,26 @@ export class FreeplaneView extends FileView {
     const before = serializeDoc(this.doc);
     let changed = false;
 
-    // open the node we leave so the child is visible
+    // open the node we leave so children are visible
     if (el.getAttribute("FOLDED") === "true") { el.removeAttribute("FOLDED"); changed = true; }
 
     const first = this.nodeChildren(el)[0];
-    if (!first) return;
+
+    if (!first) {
+      // leaf: jump to first sibling; if already first - to the last one
+      const parent = el.parentElement;
+      if (parent && parent.nodeName.toLowerCase() === "node") {
+        const siblings = this.nodeChildren(parent);
+        const idx = siblings.indexOf(el);
+        const target = idx === 0 ? siblings[siblings.length - 1] : siblings[0];
+        if (target) {
+          this.selectedId = target.getAttribute("ID");
+          if (changed) this.commit(before);
+          else this.renderAll();
+        }
+      }
+      return;
+    }
 
     // open the node we enter
     if (first.getAttribute("FOLDED") === "true") { first.removeAttribute("FOLDED"); changed = true; }

@@ -50,9 +50,6 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
 
   const rect = svgEl("rect", { width: n.width, height: n.height, rx: 7 });
 
-  const title = svgEl("title");
-  title.textContent = n.text || "";
-
   g.appendChild(rect);
 
   if (n.isMarkdown) {
@@ -79,7 +76,6 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
     });
   }
 
-  g.appendChild(title);
 
   if (n.hasRich) {
     const richCircle = svgEl("circle", { class: "fp-rich-toggle", cx: -10, cy: n.titleHeight / 2, r: 7 });
