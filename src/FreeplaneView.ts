@@ -89,20 +89,20 @@ export class FreeplaneView extends FileView {
       if (this.app.workspace.activeLeaf !== this.leaf) return;
       if (this.isEditableTarget(e.target)) return;
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      const k = e.key.toLowerCase();
-      if (k === "s") {
+      const k = e.code; // physical key: layout-independent
+      if (k === "KeyS") {
         e.preventDefault();
         e.stopPropagation();
         this.save();
-      } else if (k === "e") {
+      } else if (k === "KeyE") {
         e.preventDefault();
         e.stopPropagation();
         if (this.selectedId) this.startTextEdit(this.selectedId);
-      } else if (k === "d") {
+      } else if (k === "KeyD") {
         e.preventDefault();
         e.stopPropagation();
         if (this.selectedId) this.startRichEdit(this.selectedId, "DETAILS");
-      } else if (k === " ") {
+      } else if (e.key === " ") {
         e.preventDefault();
         e.stopPropagation();
         if (this.selectedId) this.toggleRichPreview(this.selectedId);
@@ -481,7 +481,7 @@ export class FreeplaneView extends FileView {
       cls: "mod-cta"
     });
 
-    update.addEventListener("click", () => {
+    const doUpdate = () => {
       try {
         this.updateWholeNode(
           this.selectedId!,
@@ -493,7 +493,10 @@ export class FreeplaneView extends FileView {
       } catch (e: any) {
         new Notice("Node not updated: " + (e?.message || String(e)));
       }
-    });
+    };
+
+    update.addEventListener("click", doUpdate);
+
   }
 
   richLineClicked(id: string, type: "DETAILS" | "NOTE") {
@@ -697,7 +700,7 @@ export class FreeplaneView extends FileView {
     const key = e.key;
     const mod = e.ctrlKey || e.metaKey;
 
-    if (mod && key.toLowerCase() === "z") {
+    if (mod && e.code === "KeyZ") {
       if (this.isEditableTarget(e.target)) return;
       e.preventDefault();
       if (e.shiftKey) this.redo();
@@ -708,6 +711,12 @@ export class FreeplaneView extends FileView {
     if (this.isEditableTarget(e.target)) return;
 
     if (!this.selectedId) return;
+
+    if (key === " " && e.shiftKey) {
+      e.preventDefault();
+      this.toggleRichPreview(this.selectedId);
+      return;
+    }
 
     if (key === " ") {
       e.preventDefault();
@@ -765,7 +774,8 @@ export class FreeplaneView extends FileView {
 
     if (key === "Enter") {
       e.preventDefault();
-      this.createSiblingAfterSelected();
+      if (e.shiftKey) this.createSiblingBeforeSelected();
+      else this.createSiblingAfterSelected();
       return;
     }
 
@@ -909,6 +919,33 @@ export class FreeplaneView extends FileView {
     el.removeAttribute("POSITION");
 
     this.commit(before);
+  }
+
+  createSiblingBeforeSelected() {
+    if (!this.doc || !this.selectedId) return;
+
+    const current = nodeById(this.doc, this.selectedId);
+    if (!current || !current.parentElement) return;
+
+    const parent = current.parentElement;
+    if (parent.nodeName.toLowerCase() === "map") return;
+
+    const node = this.createMmNode();
+    if (!node) return;
+
+    if (parent.parentElement?.nodeName.toLowerCase() === "map") {
+      node.setAttribute("POSITION", current.getAttribute("POSITION") || "right");
+    }
+
+    const before = serializeDoc(this.doc);
+    parent.insertBefore(node, current);
+
+    this.selectedId = node.getAttribute("ID");
+    this.commit(before);
+
+    window.setTimeout(() => {
+      if (this.selectedId) this.startTextEdit(this.selectedId);
+    }, 0);
   }
 
   createSiblingAfterSelected() {
