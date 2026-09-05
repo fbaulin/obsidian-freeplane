@@ -69,10 +69,14 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
     fo.appendChild(div);
     g.appendChild(fo);
   } else {
-    // left-aligned title
-    const text = svgEl("text", { x: 10, y: n.titleHeight / 2 + 4, "text-anchor": "start" });
-    text.textContent = displayText(n.text);
-    g.appendChild(text);
+    // left-aligned multiline title
+    const lines = n.lines || [n.text];
+    const startY = n.titleHeight / 2 + 4 - (lines.length - 1) * 8;
+    lines.forEach((ln: string, i: number) => {
+      const t = svgEl("text", { x: 10, y: startY + i * 16, "text-anchor": "start" });
+      t.textContent = ln ? displayText(ln) : " ";
+      g.appendChild(t);
+    });
   }
 
   g.appendChild(title);
@@ -129,7 +133,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
 
   g.addEventListener("pointerdown", (e: PointerEvent) => {
     const target = e.target as Element;
-    if (target.closest && target.closest(".fp-md a")) return;
+    if (target.closest && (target.closest(".fp-md a") || target.closest(".fp-rich-link"))) return;
     if (target.classList && (
       target.classList.contains("fp-fold") ||
       target.classList.contains("fp-rich-toggle") ||
@@ -138,6 +142,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
       target.classList.contains("fp-rich-edit")
     )) return;
     if (e.button !== 0) return;
+    if (target.closest && target.closest(".fp-rich-link")) return;
     handlers.startDrag(n.id, e);
   });
 
@@ -169,13 +174,31 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
     for (const line of block.lines) {
       const t = svgEl("text", {
         class: "fp-rich-line",
-        x: 10, y,
+        x: 10,
+        y,
         "text-anchor": "start",
         "data-id": n.id,
         "data-type": block.type
       });
-      t.textContent = line || " ";
+
+      const parts = (line || " ").split(/(!?\[\[[^\]\n]*\]\])/g);
+      for (const part of parts) {
+        if (!part) continue;
+        const m = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
+        if (m) {
+          const ts = svgEl("tspan", { class: "fp-rich-link", "data-href": m[2] });
+          ts.textContent = m[2];
+          t.appendChild(ts);
+        } else {
+          const ts = svgEl("tspan");
+          ts.textContent = part;
+          t.appendChild(ts);
+        }
+      }
+
       t.addEventListener("click", (e: MouseEvent) => {
+        const tgt = e.target as Element;
+        if (tgt.closest && tgt.closest(".fp-rich-link")) return; // let links bubble
         e.stopPropagation();
         handlers.richClick(n.id, block.type);
       });

@@ -37,7 +37,7 @@ export class FreeplaneView extends FileView {
   mdComponent: any = null;
   mdPass = 0;
   richExpanded = new Set<string>();
-  sidebarHidden = false;
+  sidebarHidden = true;
 
   canvasEl: HTMLElement;
   svg: SVGSVGElement;
@@ -75,6 +75,8 @@ export class FreeplaneView extends FileView {
     this.svg.setAttribute("class", "fp-svg");
     this.canvasEl.appendChild(this.svg);
     this.sidebarEl = this.contentEl.createDiv({ cls: "fp-sidebar" });
+    if (this.sidebarHidden) this.sidebarEl.style.display = "none";
+    if (this.sidebarHidden) this.sidebarEl.style.display = "none";
 
     // ----- critical input listeners first -----
     this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
@@ -122,7 +124,7 @@ export class FreeplaneView extends FileView {
       if (this.isEditableTarget(e.target)) return;
       const t = e.target as Element;
 
-      const link = t.closest ? t.closest("a.internal-link, a.external-link") : null;
+      const link = t.closest ? t.closest("a.internal-link, a.external-link, .fp-rich-link") : null;
       if (link) {
         e.preventDefault();
         e.stopPropagation();
@@ -271,6 +273,7 @@ export class FreeplaneView extends FileView {
       const text = await this.app.vault.read(file);
       this.originalText = text;
       this.doc = parseMm(text);
+      this.syncRichExpanded();
       this.loadedPath = file.path;
       this.history.clear();
       this.dirty = false;
@@ -455,7 +458,7 @@ export class FreeplaneView extends FileView {
     idEl.textContent = "ID: " + (el.getAttribute("ID") || "(none)");
 
     this.sidebarEl.createEl("label", { text: "Text" });
-    const textInput = this.sidebarEl.createEl("input", { type: "text" });
+    const textInput = this.sidebarEl.createEl("textarea", { rows: 3 }) as HTMLTextAreaElement;
     this.attachSuggest(textInput);
     textInput.value = el.getAttribute("TEXT") || "";
 
@@ -624,11 +627,44 @@ export class FreeplaneView extends FileView {
 
   }
 
+  syncRichExpanded() {
+    this.richExpanded = new Set<string>();
+    if (!this.doc) return;
+    this.doc.querySelectorAll("richcontent").forEach((rc: any) => {
+      const type = rc.getAttribute("TYPE");
+      if (type !== "DETAILS" && type !== "NOTE") return;
+      if (rc.getAttribute("HIDDEN") === "true") return;
+      const parent = rc.parentElement;
+      if (parent && parent.nodeName.toLowerCase() === "node") {
+        const id = parent.getAttribute("ID");
+        if (id) this.richExpanded.add(id);
+      }
+    });
+  }
+
   toggleRichPreview(id: string) {
-    if (this.richExpanded.has(id)) this.richExpanded.delete(id);
-    else this.richExpanded.add(id);
+    if (!this.doc) return;
+    const el = nodeById(this.doc, id);
+    if (!el) return;
+
+    const rcs = Array.from(el.children).filter(
+      (c) =>
+        c.nodeName.toLowerCase() === "richcontent" &&
+        (c.getAttribute("TYPE") === "DETAILS" || c.getAttribute("TYPE") === "NOTE")
+    );
+    if (rcs.length === 0) return;
+
+    const showing = this.richExpanded.has(id);
+    const before = serializeDoc(this.doc);
+
+    rcs.forEach((rc) => {
+      if (showing) rc.setAttribute("HIDDEN", "true");
+      else rc.removeAttribute("HIDDEN");
+    });
+
+    this.syncRichExpanded();
     this.selectedId = id;
-    this.renderAll();
+    this.commit(before);
   }
 
   updateWholeNode(id: string, text: string, details: string, note: string) {
@@ -960,6 +996,7 @@ export class FreeplaneView extends FileView {
   commit(before: string) {
     this.history.push(before);
     this.dirty = true;
+    this.syncRichExpanded();
     this.renderAll();
   }
 
@@ -982,6 +1019,7 @@ export class FreeplaneView extends FileView {
   restoreSnapshot(xml: string) {
     try {
       this.doc = parseMm(xml);
+      this.syncRichExpanded();
       this.dirty = true;
       this.renderAll();
     } catch {
@@ -1130,13 +1168,13 @@ export class FreeplaneView extends FileView {
     const box = nodeG.getBoundingClientRect();
     const canvasBox = this.canvasEl.getBoundingClientRect();
 
-    const input = this.canvasEl.createEl("input", { cls: "fp-inline-edit" }) as HTMLInputElement;
+    const input = this.canvasEl.createEl("textarea", { cls: "fp-inline-edit" }) as HTMLTextAreaElement;
     this.attachSuggest(input);
     input.value = n.text || "";
     input.style.left = (box.left - canvasBox.left + this.canvasEl.scrollLeft) + "px";
     input.style.top = (box.top - canvasBox.top + this.canvasEl.scrollTop) + "px";
     input.style.width = Math.max(box.width, 80) + "px";
-    input.style.height = Math.max(box.height, 26) + "px";
+    input.style.height = Math.max(box.height, 60) + "px";
 
     let done = false;
     const commit = () => {
@@ -1154,7 +1192,7 @@ export class FreeplaneView extends FileView {
 
     input.addEventListener("keydown", (e: KeyboardEvent) => {
       e.stopPropagation();
-      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
       if (e.key === "Escape") { e.preventDefault(); cancel(); }
     });
     input.addEventListener("blur", () => commit());

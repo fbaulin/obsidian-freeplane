@@ -20,7 +20,9 @@ export function parseMm(text: string): Document {
 
 export function serializeDoc(doc: Document): string {
   if (!doc.documentElement) return "";
-  return new XMLSerializer().serializeToString(doc.documentElement);
+  return new XMLSerializer()
+    .serializeToString(doc.documentElement)
+    .replace(/&#10;/g, "&#xa;");
 }
 
 export function serializeMm(doc: Document, originalText: string): string {
@@ -138,6 +140,9 @@ export function setRichContent(
   }
 
   const parsed = parseRichContentFragment(type, trimmed);
+
+  // fresh content is visible
+  rc.removeAttribute("HIDDEN");
 
   while (rc.firstChild) {
     rc.removeChild(rc.firstChild);

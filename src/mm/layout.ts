@@ -72,17 +72,20 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
       ? RICH_PAD_TOP + richLineCount * RICH_LINE_H + RICH_PAD_BOTTOM
       : 0;
 
+    const textLines = text.split("\n");
+    const longestLine = textLines.reduce((a, b) => (a.length >= b.length ? a : b), " ");
+
     const isMarkdown = needsMarkdown(text);
     const mdSize = isMarkdown ? (mdSizes || {})[id] || null : null;
     const titleHeight = isMarkdown
       ? Math.max(NODE_H, mdSize ? mdSize.h : 48)
-      : NODE_H;
+      : 14 + textLines.length * 16;
 
     const nodeHeight = titleHeight + richHeight;
 
     const titleWidth = isMarkdown
       ? (mdSize ? mdSize.w : 220)
-      : estimateWidth(text);
+      : estimateWidth(longestLine);
     const richWidth = richExpanded ? RICH_MAX_CHARS * 6.4 + 34 : 0;
     const width = Math.max(titleWidth, richWidth, 60);
 
@@ -106,6 +109,7 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
       height: nodeHeight,
       titleHeight,
       isMarkdown,
+      lines: textLines,
       richBlocks,
       hasRich,
       hasDetails: !!details,
