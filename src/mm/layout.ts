@@ -25,6 +25,7 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
       byId,
       rootId: null,
       viewBox: [0, 0, 800, 600],
+      bounds: [0, 0, 800, 600],
       width: 800,
       height: 600
     };
@@ -258,7 +259,10 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
     maxY = 600;
   }
 
-  const pad = 80;
+  const bounds = [minX, minY, maxX, maxY];
+
+  // large empty margin so any node can be panned anywhere on screen
+  const pad = 2000;
   const viewBox = [
     minX - pad,
     minY - pad,
@@ -272,6 +276,7 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
     byId,
     rootId: root.id,
     viewBox,
+    bounds,
     width: Math.max(800, viewBox[2]),
     height: Math.max(600, viewBox[3])
   };

@@ -264,3 +264,11 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+.fp-canvas {
+  cursor: grab;
+}
+
+.fp-canvas.fp-panning {
+  cursor: grabbing;
+}

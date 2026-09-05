@@ -48,6 +48,8 @@ export class FreeplaneView extends FileView {
 
   dragging: any = null;
   dropHint: any = null;
+  panning: any = null;
+  suppressNextClick = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: any) {
     super(leaf);
@@ -121,6 +123,10 @@ export class FreeplaneView extends FileView {
     }, { passive: false } as any);
 
     this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
+      if (this.suppressNextClick) {
+        this.suppressNextClick = false;
+        return;
+      }
       if (this.isEditableTarget(e.target)) return;
       const t = e.target as Element;
 
@@ -138,6 +144,48 @@ export class FreeplaneView extends FileView {
         this.selectedId = null;
         this.renderAll();
       }
+    });
+
+    this.registerDomEvent(this.canvasEl, "contextmenu", (e: MouseEvent) => {
+      const t = e.target as Element;
+      if (t.closest && t.closest(".fp-node")) return; // node menu handles itself
+      e.preventDefault();
+      const menu = new Menu();
+      menu.addItem((item) => item.setTitle("Fit map").onClick(() => this.fitMap()));
+      menu.addItem((item) => item.setTitle("Center map").onClick(() => this.centerOnContent()));
+      menu.showAtMouseEvent(e);
+    });
+
+    this.registerDomEvent(this.canvasEl, "pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const t = e.target as Element;
+      if (t.closest && (t.closest(".fp-node") || t.closest(".fp-inline-edit") || t.closest("a"))) return;
+      if (this.isEditableTarget(e.target)) return;
+      this.panning = {
+        startX: e.clientX,
+        startY: e.clientY,
+        scrollLeft: this.canvasEl.scrollLeft,
+        scrollTop: this.canvasEl.scrollTop,
+        moved: false
+      };
+    });
+
+    this.registerDomEvent(document, "pointermove", (e: PointerEvent) => {
+      if (!this.panning) return;
+      const dx = e.clientX - this.panning.startX;
+      const dy = e.clientY - this.panning.startY;
+      if (!this.panning.moved && Math.hypot(dx, dy) < 4) return;
+      this.panning.moved = true;
+      this.canvasEl.addClass("fp-panning");
+      this.canvasEl.scrollLeft = this.panning.scrollLeft - dx;
+      this.canvasEl.scrollTop = this.panning.scrollTop - dy;
+    });
+
+    this.registerDomEvent(document, "pointerup", () => {
+      if (!this.panning) return;
+      if (this.panning.moved) this.suppressNextClick = true;
+      this.panning = null;
+      this.canvasEl.removeClass("fp-panning");
     });
 
     console.log("Freeplane: onOpen listeners registered");
@@ -279,6 +327,9 @@ export class FreeplaneView extends FileView {
       this.dirty = false;
       this.selectedId = null;
       this.renderAll();
+      this.centerOnContent();
+      requestAnimationFrame(() => this.centerOnContent());
+      window.setTimeout(() => this.centerOnContent(), 100);
     } catch (e: any) {
       this.doc = null;
       this.loadedPath = null;
@@ -396,6 +447,39 @@ export class FreeplaneView extends FileView {
     }
   }
 
+  fitMap() {
+    if (!this.layout || !this.canvasEl) return;
+    const b = this.layout.bounds as number[];
+    if (!b) return;
+    const bw = b[2] - b[0];
+    const bh = b[3] - b[1];
+    if (bw <= 0 || bh <= 0) return;
+
+    const pad = 40;
+    const z = Math.min(
+      (this.canvasEl.clientWidth - 2 * pad) / bw,
+      (this.canvasEl.clientHeight - 2 * pad) / bh
+    );
+    this.zoom = Math.min(3, Math.max(0.1, Math.round(z * 100) / 100));
+    this.applyZoom();
+    this.centerOnContent();
+  }
+
+  centerOnContent() {
+    if (!this.layout || !this.canvasEl) return;
+    const vb = this.layout.viewBox as number[];
+    const b = this.layout.bounds as number[];
+    if (!vb || !b) return;
+
+    const cx = (b[0] + b[2]) / 2;
+    const cy = (b[1] + b[3]) / 2;
+
+    this.canvasEl.scrollLeft =
+      (cx - vb[0]) * this.zoom - this.canvasEl.clientWidth / 2;
+    this.canvasEl.scrollTop =
+      (cy - vb[1]) * this.zoom - this.canvasEl.clientHeight / 2;
+  }
+
   applyZoom() {
     if (!this.svg || !this.layout) return;
     this.svg.setAttribute("width", String(Math.round(this.layout.width * this.zoom)));
@@ -404,6 +488,13 @@ export class FreeplaneView extends FileView {
 
   renderAll() {
     if (!this.doc || !this.svg) return;
+
+    // user-space point currently at viewport center -> keep it fixed
+    let anchor: { x: number; y: number } | null = null;
+    if (this.svg.getAttribute("viewBox") && this.canvasEl.clientWidth > 0) {
+      const r = this.canvasEl.getBoundingClientRect();
+      anchor = clientToSvg(this.svg, r.left + r.width / 2, r.top + r.height / 2);
+    }
 
     this.layout = layoutMap(this.doc, this.richExpanded, this.mdSizes);
 
@@ -424,6 +515,20 @@ export class FreeplaneView extends FileView {
     });
 
     this.applyZoom();
+
+    if (anchor) {
+      const pt = this.svg.createSVGPoint();
+      pt.x = anchor.x;
+      pt.y = anchor.y;
+      const ctm = this.svg.getScreenCTM();
+      if (ctm) {
+        const sp = pt.matrixTransform(ctm);
+        const r2 = this.canvasEl.getBoundingClientRect();
+        this.canvasEl.scrollLeft += sp.x - (r2.left + r2.width / 2);
+        this.canvasEl.scrollTop += sp.y - (r2.top + r2.height / 2);
+      }
+    }
+
     this.renderMarkdownPass();
     this.renderSidebar();
     (this.leaf as any).updateHeader?.();
