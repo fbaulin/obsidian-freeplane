@@ -1173,8 +1173,32 @@ export class FreeplaneView extends FileView {
     input.value = n.text || "";
     input.style.left = (box.left - canvasBox.left + this.canvasEl.scrollLeft) + "px";
     input.style.top = (box.top - canvasBox.top + this.canvasEl.scrollTop) + "px";
-    input.style.width = Math.max(box.width, 80) + "px";
-    input.style.height = Math.max(box.height, 60) + "px";
+    // match the on-screen (zoomed) text size of the node
+    const scale = box.width / Math.max(n.width, 1);
+
+    const resizeEdit = () => {
+      const fs = 13 * scale;
+      input.style.fontSize = fs + "px";
+
+      const lines = input.value.split("\n");
+      let longest = 0;
+      let visual = 0;
+      for (const ln of lines) {
+        longest = Math.max(longest, ln.length);
+        visual += Math.max(1, Math.ceil(ln.length / 60));
+      }
+
+      // grow horizontally to 60 chars first, then vertically line by line
+      const chars = Math.min(Math.max(longest, 8), 60);
+      const w = chars * fs * 0.55 + 24;
+      const h = visual * fs * 1.35 + 14;
+
+      input.style.width = Math.max(w, box.width) + "px";
+      input.style.height = Math.max(h, box.height) + "px";
+    };
+
+    resizeEdit();
+    input.addEventListener("input", resizeEdit);
 
     let done = false;
     const commit = () => {

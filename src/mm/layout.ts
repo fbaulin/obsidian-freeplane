@@ -72,7 +72,23 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
       ? RICH_PAD_TOP + richLineCount * RICH_LINE_H + RICH_PAD_BOTTOM
       : 0;
 
-    const textLines = text.split("\n");
+    const rawLines = text.split("\n");
+    const textLines: string[] = [];
+    for (const ln of rawLines) {
+      if (ln.length <= 60) {
+        textLines.push(ln);
+        continue;
+      }
+      // word-wrap long lines at 60 chars, same as the inline editor
+      let rest = ln;
+      while (rest.length > 60) {
+        let cut = rest.lastIndexOf(" ", 60);
+        if (cut < 12) cut = 60;
+        textLines.push(rest.slice(0, cut));
+        rest = rest.slice(cut).trimStart();
+      }
+      textLines.push(rest);
+    }
     const longestLine = textLines.reduce((a, b) => (a.length >= b.length ? a : b), " ");
 
     const isMarkdown = needsMarkdown(text);
@@ -261,10 +277,33 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
   };
 }
 
+let measureCtx: CanvasRenderingContext2D | null = null;
+let cachedFont = "";
+
+function font13(): string {
+  if (!cachedFont) {
+    const fam =
+      (typeof document !== "undefined" && getComputedStyle(document.body).fontFamily) ||
+      "sans-serif";
+    cachedFont = "13px " + fam;
+  }
+  return cachedFont;
+}
+
 function estimateWidth(text: string): number {
   const t = text || " ";
-  const len = Math.min(t.length, 80);
-  return Math.max(60, len * 7 + 30);
+  let w: number;
+  if (!measureCtx) {
+    measureCtx = document.createElement("canvas").getContext("2d");
+  }
+  if (measureCtx) {
+    measureCtx.font = font13();
+    w = measureCtx.measureText(t).width;
+  } else {
+    w = t.length * 7;
+  }
+  // 10px left padding (text x=10) + 10px right padding
+  return Math.max(60, Math.ceil(w) + 20);
 }
 
 function wrapText(text: string, width: number): string[] {
