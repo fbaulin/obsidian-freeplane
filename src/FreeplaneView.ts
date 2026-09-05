@@ -410,6 +410,16 @@ export class FreeplaneView extends FileView {
     return changed;
   }
 
+  zoomStep(delta: number) {
+    const newZoom = Math.min(3, Math.max(0.1, Math.round((this.zoom + delta) * 100) / 100));
+    if (newZoom === this.zoom) return;
+    const r = this.canvasEl.getBoundingClientRect();
+    this.zoomAt(newZoom, {
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2
+    } as any);
+  }
+
   zoomAt(newZoom: number, e?: WheelEvent) {
     if (!this.svg || !this.layout) {
       this.zoom = newZoom;
@@ -623,6 +633,10 @@ export class FreeplaneView extends FileView {
     if (!this.doc) return;
 
     if (!this.selectedId) {
+      const zoomRow = this.sidebarEl.createDiv({ cls: "fp-zoom-row" });
+      zoomRow.createEl("button", { text: "+" }).addEventListener("click", () => this.zoomStep(0.1));
+      zoomRow.createEl("button", { text: "\u2212" }).addEventListener("click", () => this.zoomStep(-0.1));
+
       this.sidebarEl.createEl("p", {
         text: "Select a node. Double-click to edit its text. Drag nodes to move them."
       });
