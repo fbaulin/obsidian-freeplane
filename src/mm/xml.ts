@@ -1,5 +1,21 @@
+const XML_ENTS = ["amp", "lt", "gt", "apos", "quot"];
+let entDecoder: HTMLTextAreaElement | null = null;
+
+// Freeplane files may contain HTML entities (&nbsp; etc.) which are invalid
+// in strict XML. Rewrite known HTML named entities to numeric form.
+function htmlEntityToNumeric(text: string): string {
+  return text.replace(/&([a-zA-Z][a-zA-Z0-9]{1,30});/g, (m, name) => {
+    if (XML_ENTS.indexOf(name) >= 0) return m;
+    if (!entDecoder) entDecoder = document.createElement("textarea");
+    entDecoder.innerHTML = "&" + name + ";";
+    const v = entDecoder.value;
+    if (!v || v === "&" + name + ";") return m; // truly unknown: leave as is
+    return "&#" + v.codePointAt(0) + ";";
+  });
+}
+
 export function parseMm(text: string): Document {
-  const doc = new DOMParser().parseFromString(text, "application/xml");
+  const doc = new DOMParser().parseFromString(htmlEntityToNumeric(text), "application/xml");
 
   const parserError =
     doc.getElementsByTagName("parsererror")[0] || doc.querySelector("parsererror");
