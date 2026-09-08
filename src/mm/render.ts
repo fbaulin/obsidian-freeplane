@@ -1,20 +1,30 @@
+/**
+ * mm/render.ts
+ * SVG DOM builder. Turns the layout tree into <g> node groups (rect +
+ * multiline text or a Markdown foreignObject), fold/rich/edit circles,
+ * DETAILS/NOTE preview blocks with separator lines and clickable
+ * [[link]] tspans, and bezier edge paths between parent and child.
+ * All interaction is delegated back to the view via `handlers`.
+ */
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+/** Create an element in the SVG namespace with attributes. */
 function svgEl(tag: string, attrs: Record<string, any> = {}): any {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
   return el;
 }
 
+/** Clear the svg and render edges + nodes for the given layout. */
 export function renderMap(
   svg: SVGSVGElement,
   layout: any,
   selectedId: string | null,
   handlers: any
 ) {
-  svg.innerHTML = "";
+  svg.innerHTML = "";                              // full redraw each pass
 
-  if (!layout || !layout.rootId) {
+  if (!layout || !layout.rootId) {                 // nothing to draw
     svg.setAttribute("viewBox", "0 0 800 600");
     return;
   }
@@ -23,36 +33,36 @@ export function renderMap(
   svg.setAttribute("width", String(layout.width));
   svg.setAttribute("height", String(layout.height));
 
-  const edgeLayer = svgEl("g", { class: "fp-edges" });
-  const nodeLayer = svgEl("g", { class: "fp-nodes" });
+  const edgeLayer = svgEl("g", { class: "fp-edges" });   // connectors below
+  const nodeLayer = svgEl("g", { class: "fp-nodes" });   // nodes above
   svg.appendChild(edgeLayer);
   svg.appendChild(nodeLayer);
 
   for (const edge of layout.edges) {
     edgeLayer.appendChild(svgEl("path", { class: "fp-edge", d: edgePath(edge.from, edge.to) }));
   }
-
   for (const node of layout.nodes) {
     nodeLayer.appendChild(renderNode(node, selectedId, handlers));
   }
 }
 
+/** Build one node group: box, title (or markdown), circles, preview. */
 function renderNode(n: any, selectedId: string | null, handlers: any): SVGGElement {
   const g = svgEl("g", {
     class: "fp-node",
-    transform: `translate(${n.x},${n.y})`,
+    transform: `translate(${n.x},${n.y})`,         // layout position
     "data-id": n.id,
     "pointer-events": "all",
     style: "cursor: grab;"
   });
 
-  if (n.id === selectedId) g.classList.add("selected");
+  if (n.id === selectedId) g.classList.add("selected");   // selection outline
 
   const rect = svgEl("rect", { width: n.width, height: n.height, rx: 7 });
-
   g.appendChild(rect);
 
   if (n.isMarkdown) {
+    // Markdown/MathJax/wikilink nodes render into an HTML foreignObject
     const fo = svgEl("foreignObject", {
       class: "fp-fo",
       x: 0,
@@ -60,13 +70,13 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
       width: n.width,
       height: n.titleHeight
     });
-    const div = document.createElement("div");
+    const div = document.createElement("div");    // filled by the view's pass
     div.className = "fp-md";
     div.setAttribute("data-id", n.id);
     fo.appendChild(div);
     g.appendChild(fo);
   } else {
-    // left-aligned multiline title
+    // left-aligned multiline title, 16px per line, vertically centered
     const lines = n.lines || [n.text];
     const startY = n.titleHeight / 2 + 4 - (lines.length - 1) * 8;
     lines.forEach((ln: string, i: number) => {
@@ -76,8 +86,8 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
     });
   }
 
-
   if (n.hasRich) {
+    // left circle: show/hide DETAILS+NOTE preview (writes HIDDEN attr)
     const richCircle = svgEl("circle", { class: "fp-rich-toggle", cx: -10, cy: n.titleHeight / 2, r: 7 });
     const richSign = svgEl("text", { class: "fp-rich-sign", x: -10, y: n.titleHeight / 2 + 4, "text-anchor": "middle" });
     richSign.textContent = n.richExpanded ? "↑" : "↓";
@@ -87,6 +97,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
   }
 
   if (n.richExpanded && (n.hasDetails || n.hasNote)) {
+    // left "→" circles: open the inline editor for DETAILS / NOTE
     let ey = n.titleHeight / 2 + 18;
     const types: Array<"DETAILS" | "NOTE"> = [];
     if (n.hasDetails) types.push("DETAILS");
@@ -103,6 +114,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
   }
 
   if (n.hasChildren) {
+    // right circle: fold/unfold this node's children
     const foldX = n.width + 10;
     const fold = svgEl("circle", { class: "fp-fold", cx: foldX, cy: n.titleHeight / 2, r: 7 });
     const sign = svgEl("text", { class: "fp-fold-sign", x: foldX, y: n.titleHeight / 2 + 3, "text-anchor": "middle" });
@@ -113,11 +125,18 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
   }
 
   if (n.richExpanded && n.richBlocks?.length) {
-    renderRichBlocks(g, n, handlers);
+    renderRichBlocks(g, n, handlers);              // DETAILS/NOTE preview
   }
 
-  g.addEventListener("click", (e: MouseEvent) => { e.stopPropagation(); handlers.select(n.id); });
+  // click = select (links bubble up to the view instead)
+  g.addEventListener("click", (e: MouseEvent) => {
+    const t = e.target as Element;
+    if (t.closest && (t.closest(".fp-md a") || t.closest(".fp-rich-link"))) return;
+    e.stopPropagation();
+    handlers.select(n.id);
+  });
 
+  // double-click = rename (ignored on links / preview lines / separators)
   g.addEventListener("dblclick", (e: MouseEvent) => {
     e.stopPropagation();
     const target = e.target as Element;
@@ -127,6 +146,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
     handlers.editText(n.id);
   });
 
+  // pointerdown = start drag (ignored on circles, links, preview lines)
   g.addEventListener("pointerdown", (e: PointerEvent) => {
     const target = e.target as Element;
     if (target.closest && (target.closest(".fp-md a") || target.closest(".fp-rich-link"))) return;
@@ -137,11 +157,11 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
       target.classList.contains("fp-rich-sep") ||
       target.classList.contains("fp-rich-edit")
     )) return;
-    if (e.button !== 0) return;
-    if (target.closest && target.closest(".fp-rich-link")) return;
+    if (e.button !== 0) return;                    // left button only
     handlers.startDrag(n.id, e);
   });
 
+  // right-click = node context menu
   g.addEventListener("contextmenu", (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -151,13 +171,17 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
   return g;
 }
 
-// No "DETAILS/NOTE" captions: a thin separator before each block instead.
+/**
+ * DETAILS/NOTE preview: one separator line per block (no captions),
+ * then wrapped lines; [[wikilinks]] inside a line become clickable
+ * accent-colored tspans.
+ */
 function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
-  let y = n.titleHeight + 12;
+  let y = n.titleHeight + 12;                      // first line baseline
 
   let firstSep = true;
   for (const block of n.richBlocks) {
-    const sepY = y - (firstSep ? 14 : 11);
+    const sepY = y - (firstSep ? 14 : 11);         // header sep sits 3px higher
     firstSep = false;
     g.appendChild(svgEl("line", {
       class: "fp-rich-sep",
@@ -177,13 +201,14 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
         "data-type": block.type
       });
 
+      // split line into plain parts and [[...]] / ![[...]] link parts
       const parts = (line || " ").split(/(!?\[\[[^\]\n]*\]\])/g);
       for (const part of parts) {
         if (!part) continue;
         const m = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
         if (m) {
           const ts = svgEl("tspan", { class: "fp-rich-link", "data-href": m[2] });
-          ts.textContent = m[2];
+          ts.textContent = m[2];                   // show name without brackets
           t.appendChild(ts);
         } else {
           const ts = svgEl("tspan");
@@ -192,6 +217,7 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
         }
       }
 
+      // single click on plain text = manual double-click detection target
       t.addEventListener("click", (e: MouseEvent) => {
         const tgt = e.target as Element;
         if (tgt.closest && tgt.closest(".fp-rich-link")) return; // let links bubble
@@ -201,28 +227,29 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
       g.appendChild(t);
       y += n.richLineH;
     }
-
-    y += 4;
+    y += 4;                                        // gap between blocks
   }
 }
 
+/** Bezier connector between parent and child (side-aware). */
 function edgePath(from: any, to: any): string {
-  const fromY = from.y + from.titleHeight / 2;
+  const fromY = from.y + from.titleHeight / 2;     // vertical center of title
   const toY = to.y + to.titleHeight / 2;
 
   if (to.side === "right") {
-    const x1 = from.x + from.width;
-    const x2 = to.x;
-    const mx = (x1 + x2) / 2;
+    const x1 = from.x + from.width;                // parent right edge
+    const x2 = to.x;                               // child left edge
+    const mx = (x1 + x2) / 2;                      // control point midpoint
     return `M ${x1} ${fromY} C ${mx} ${fromY}, ${mx} ${toY}, ${x2} ${toY}`;
   } else {
-    const x1 = from.x;
-    const x2 = to.x + to.width;
+    const x1 = from.x;                             // parent left edge
+    const x2 = to.x + to.width;                    // child right edge
     const mx = (x1 + x2) / 2;
     return `M ${x1} ${fromY} C ${mx} ${fromY}, ${mx} ${toY}, ${x2} ${toY}`;
   }
 }
 
+/** Truncate very long lines for display (full text stays in the file). */
 function displayText(text: string): string {
   if (!text) return " ";
   return text.length > 80 ? text.slice(0, 79) + "…" : text;

@@ -1,19 +1,36 @@
-const XML_ENTS = ["amp", "lt", "gt", "apos", "quot"];
-let entDecoder: HTMLTextAreaElement | null = null;
+/**
+ * mm/xml.ts
+ * XML safety layer. Parses `.mm` files (repairing HTML named entities that
+ * are invalid in strict XML), serializes them back preserving the original
+ * XML declaration and Freeplane's `&#xa;` newline spelling, and provides the
+ * small DOM helpers used by the view: node lookup, TEXT/FOLDED edits,
+ * richcontent read/write and structural node moves.
+ * Everything is DOM mutation + XMLSerializer — never full regeneration.
+ */
 
-// Freeplane files may contain HTML entities (&nbsp; etc.) which are invalid
-// in strict XML. Rewrite known HTML named entities to numeric form.
+const XML_ENTS = ["amp", "lt", "gt", "apos", "quot"];  // legal XML entities
+let entDecoder: HTMLTextAreaElement | null = null;     // lazy entity decoder
+
+/**
+ * Freeplane files may contain HTML entities (&nbsp; etc.) which strict XML
+ * rejects. Rewrite every known HTML named entity to its numeric form
+ * (&nbsp; -> &#160;); unknown names are left untouched.
+ */
 function htmlEntityToNumeric(text: string): string {
   return text.replace(/&([a-zA-Z][a-zA-Z0-9]{1,30});/g, (m, name) => {
-    if (XML_ENTS.indexOf(name) >= 0) return m;
+    if (XML_ENTS.indexOf(name) >= 0) return m;          // keep XML entities
     if (!entDecoder) entDecoder = document.createElement("textarea");
-    entDecoder.innerHTML = "&" + name + ";";
+    entDecoder.innerHTML = "&" + name + ";";            // browser decodes it
     const v = entDecoder.value;
-    if (!v || v === "&" + name + ";") return m; // truly unknown: leave as is
-    return "&#" + v.codePointAt(0) + ";";
+    if (!v || v === "&" + name + ";") return m;         // truly unknown: keep
+    return "&#" + v.codePointAt(0) + ";";               // numeric equivalent
   });
 }
 
+/**
+ * Parse `.mm` text into a Document. Throws on parser errors or a non-`<map>`
+ * root. Guarantees every `<node>` has an ID (generates one only if missing).
+ */
 export function parseMm(text: string): Document {
   const doc = new DOMParser().parseFromString(htmlEntityToNumeric(text), "application/xml");
 
@@ -34,6 +51,7 @@ export function parseMm(text: string): Document {
   return doc;
 }
 
+/** Serialize the map element; newlines in attributes become `&#xa;` (Freeplane style). */
 export function serializeDoc(doc: Document): string {
   if (!doc.documentElement) return "";
   return new XMLSerializer()
@@ -41,27 +59,31 @@ export function serializeDoc(doc: Document): string {
     .replace(/&#10;/g, "&#xa;");
 }
 
+/**
+ * Full-file serialization: re-attaches the original `<?xml ...?>`
+ * declaration (if the source had one) and a trailing newline.
+ */
 export function serializeMm(doc: Document, originalText: string): string {
-  const declMatch = originalText.match(/^\s*<\?xml[\s\S]*?\?>/);
+  const declMatch = originalText.match(/^\s*<\?xml[\s\S]*?\?>/);  // original prolog
   const decl = declMatch ? declMatch[0].trim() : "";
 
   let xml = serializeDoc(doc);
 
   if (decl && !xml.trimStart().startsWith("<?xml")) {
-    xml = decl + "\n" + xml;
+    xml = decl + "\n" + xml;                              // re-attach once
   }
-
-  if (!xml.endsWith("\n")) {
-    xml += "\n";
-  }
-
+  if (!xml.endsWith("\n")) xml += "\n";                   // Freeplane ends with \n
   return xml;
 }
 
+/** Direct `<node>` children of an element (ignores richcontent, font, ...). */
 export function childNodeElements(el: Element): Element[] {
-  return Array.from(el.children).filter((c) => c.nodeName.toLowerCase() === "node");
+  return Array.from(el.children).filter(
+    (c) => c.nodeName.toLowerCase() === "node"
+  );
 }
 
+/** Find a node element by its Freeplane ID attribute (CSS-escaped). */
 export function nodeById(doc: Document, id: string): Element | null {
   if (!id) return null;
 
@@ -73,10 +95,11 @@ export function nodeById(doc: Document, id: string): Element | null {
   try {
     return doc.querySelector(`node[ID="${escaped}"]`);
   } catch {
-    return null;
+    return null;                                          // bad selector safety
   }
 }
 
+/** Set node TEXT; empty string removes the attribute (Freeplane tolerates it). */
 export function setText(nodeEl: Element, text: string) {
   if (text === "") {
     nodeEl.removeAttribute("TEXT");
@@ -85,6 +108,7 @@ export function setText(nodeEl: Element, text: string) {
   }
 }
 
+/** Toggle FOLDED="true" (unfold removes the attribute). False if no children. */
 export function toggleFolded(nodeEl: Element): boolean {
   if (childNodeElements(nodeEl).length === 0) return false;
 
@@ -99,6 +123,7 @@ export function toggleFolded(nodeEl: Element): boolean {
   return true;
 }
 
+/** Direct richcontent child of given TYPE (DETAILS/NOTE), or null. */
 export function findRichcontent(nodeEl: Element, type: string): Element | null {
   return (
     Array.from(nodeEl.children).find(
@@ -109,6 +134,11 @@ export function findRichcontent(nodeEl: Element, type: string): Element | null {
   );
 }
 
+/**
+ * Read richcontent for editing. UX: if the XHTML body holds only text-only
+ * `<p>` elements, return their plain text joined by newlines; otherwise the
+ * raw inner XML so structure is never lost.
+ */
 export function richContentSource(nodeEl: Element, type: string): string {
   const rc = findRichcontent(nodeEl, type);
   if (!rc) return "";
@@ -128,6 +158,12 @@ export function richContentSource(nodeEl: Element, type: string): string {
     .join("");
 }
 
+/**
+ * Write richcontent. Empty source removes the element. Plain text is wrapped
+ * into one XHTML `<p>` per line; markup sources must be valid XML/XHTML.
+ * Fresh content clears HIDDEN so the preview shows it. Element attributes
+ * (e.g. CONTENT-TYPE) are preserved because we only replace children.
+ */
 export function setRichContent(
   doc: Document,
   nodeEl: Element,
@@ -138,7 +174,7 @@ export function setRichContent(
   const trimmed = source.trim();
 
   if (!trimmed) {
-    if (rc) rc.remove();
+    if (rc) rc.remove();                                  // cleared -> drop element
     return;
   }
 
@@ -161,18 +197,23 @@ export function setRichContent(
   rc.removeAttribute("HIDDEN");
 
   while (rc.firstChild) {
-    rc.removeChild(rc.firstChild);
+    rc.removeChild(rc.firstChild);                        // wipe old children
   }
 
   for (const child of Array.from(parsed.childNodes)) {
-    rc.appendChild(doc.importNode(child, true));
+    rc.appendChild(doc.importNode(child, true));          // import parsed XHTML
   }
 }
 
+/**
+ * Parse user-supplied richcontent source. Plain text becomes XHTML
+ * paragraphs; a full `<richcontent>` wrapper is accepted; anything else is
+ * wrapped in one. Throws when the result is not valid XML.
+ */
 function parseRichContentFragment(type: string, source: string): Element {
   let xml = source.trim();
 
-  // Convenience: plain text becomes a simple XHTML paragraph.
+  // Convenience: plain text becomes a simple XHTML paragraph per line.
   if (!xml.startsWith("<")) {
     const paras = xml
       .split("\n")
@@ -209,6 +250,12 @@ function parseRichContentFragment(type: string, source: string): Element {
   return root;
 }
 
+/**
+ * Structural move used by drag & drop and hotkeys.
+ * mode "child": append into target; "before"/"after": sibling reorder.
+ * Keeps/sets POSITION only for top-level nodes; never touches descendants'
+ * contents. Returns false for illegal targets (self, own descendant, root).
+ */
 export function moveNode(
   doc: Document,
   dragId: string,
@@ -231,7 +278,7 @@ export function moveNode(
       const side = sideHint || drag.getAttribute("POSITION") || "right";
       drag.setAttribute("POSITION", side === "left" ? "left" : "right");
     } else {
-      drag.removeAttribute("POSITION");
+      drag.removeAttribute("POSITION");                   // POSITION = top-level only
     }
 
     return true;
@@ -245,7 +292,7 @@ export function moveNode(
   let ref: Element | null = target;
 
   if (mode === "after") {
-    ref = nextNodeSibling(target);
+    ref = nextNodeSibling(target);                        // insert after target
   }
 
   // If the reference is the dragged node itself, move to its next node sibling.
@@ -265,6 +312,7 @@ export function moveNode(
   return true;
 }
 
+/** True when the element's parent is `<map>` (i.e. it is the root node). */
 function isRootNode(el: Element): boolean {
   return (
     !!el.parentElement &&
@@ -272,6 +320,7 @@ function isRootNode(el: Element): boolean {
   );
 }
 
+/** Next sibling that is a `<node>` (skips richcontent/font/etc). */
 function nextNodeSibling(el: Element): Element | null {
   let sibling = el.nextElementSibling;
 
@@ -282,27 +331,29 @@ function nextNodeSibling(el: Element): Element | null {
   return sibling;
 }
 
+/** Give every `<node>` without an ID a unique Freeplane-style ID_… . */
 function ensureIds(root: Element) {
   const existing = new Set<string>();
 
   root.querySelectorAll("node[ID]").forEach((node) => {
     const id = node.getAttribute("ID");
-    if (id) existing.add(id);
+    if (id) existing.add(id);                             // collect used ids
   });
 
   root.querySelectorAll("node").forEach((node) => {
-    if (node.getAttribute("ID")) return;
+    if (node.getAttribute("ID")) return;                  // already identified
 
     let id = "";
     do {
       id = "ID_" + Math.random().toString(36).slice(2, 10);
-    } while (existing.has(id));
+    } while (existing.has(id));                           // avoid collisions
 
     existing.add(id);
     node.setAttribute("ID", id);
   });
 }
 
+/** Escape the five XML special characters (for generated markup). */
 function escapeXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
