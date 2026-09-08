@@ -9,6 +9,7 @@
  */
 import { childNodeElements, richContentSource } from "./xml";
 import { needsMarkdown } from "./md";
+import { settings } from "../settings";
 
 const NODE_H = 30;              // single-line title height
 const H_GAP = 56;               // horizontal gap parent <-> child
@@ -27,7 +28,8 @@ const RICH_PAD_BOTTOM = 8;      // preview bottom padding
  * and a viewBox padded with a large pannable margin.
  */
 export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?: Record<string, { w: number; h: number }>) {
-  const expanded = richExpandedIds || new Set<string>();    // visible previews
+  const expanded = richExpandedIds || new Set<string>();
+  const MAXSYM = settings.nodeMaxWidthSymbols;   // wrap width from settings.json    // visible previews
   const rootEl = childNodeElements(doc.documentElement)[0]; // the map root node
 
   const nodes: any[] = [];          // flat list for renderer & hit tests
@@ -67,14 +69,14 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
         richBlocks.push({
           type: "DETAILS",
           title: "DETAILS",
-          lines: wrapText(details, RICH_MAX_CHARS)
+          lines: wrapText(details, MAXSYM)
         });
       }
       if (note) {
         richBlocks.push({
           type: "NOTE",
           title: "NOTE",
-          lines: wrapText(note, RICH_MAX_CHARS)
+          lines: wrapText(note, MAXSYM)
         });
       }
     }
@@ -92,14 +94,14 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
     const rawLines = text.split("\n");
     const textLines: string[] = [];
     for (const ln of rawLines) {
-      if (ln.length <= 60) {
+      if (ln.length <= MAXSYM) {
         textLines.push(ln);
         continue;
       }
       let rest = ln;
-      while (rest.length > 60) {
-        let cut = rest.lastIndexOf(" ", 60);   // prefer word boundary
-        if (cut < 12) cut = 60;                // over-long word: hard cut
+      while (rest.length > MAXSYM) {
+        let cut = rest.lastIndexOf(" ", MAXSYM);   // prefer word boundary
+        if (cut < 12) cut = MAXSYM;                // over-long word: hard cut
         textLines.push(rest.slice(0, cut));
         rest = rest.slice(cut).trimStart();
       }
@@ -116,7 +118,7 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
     const titleWidth = isMarkdown
       ? (mdSize ? mdSize.w : 220)                            // measured width
       : estimateWidth(longestLine);                          // canvas-measured
-    const richWidth = richExpanded ? RICH_MAX_CHARS * 6.4 + 34 : 0; // preview width
+    const richWidth = richExpanded ? MAXSYM * 6.4 + 34 : 0; // preview width
     const width = Math.max(titleWidth, richWidth, 60);
 
     const children = visibleChildren.map((child) =>
