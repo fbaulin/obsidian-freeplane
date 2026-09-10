@@ -15,8 +15,12 @@ Targets: Obsidian 1.6.5 / 1.6.7 (no post-1.7 APIs), Freeplane 1.9.14 file format
 - Markdown pass: nodes containing `\latex`, `[[`, `![[` render through
   Obsidian's MarkdownRenderer (MathJax, wikilinks, Excalidraw embeds).
 - Drag & drop re-parenting / sibling reordering (DOM mutations only).
+- Shift-click multi-selection; Delete and drag operate on the selected group.
 - Snapshot undo/redo; save only via Ctrl+S / menu / command (never on close).
-- Link suggest popup (`[[` / `![[`) in all text editors.
+- Link suggest popup (`[[` / `![[`) lists every file in the vault navigator.
+- Link context menu: open, open in a new tab, or open with the default app.
+- Read-only rendering of relative Freeplane `ExternalObject` image hooks.
+- Adaptive DETAILS/NOTE preview width and a map-wide visibility toggle.
 - New-map creator (navigator context menu + palette) in Freeplane 1.9 format.
 - Pan (LMB on empty space), zoom (Ctrl+wheel, +/− buttons), fit/center menu.
 

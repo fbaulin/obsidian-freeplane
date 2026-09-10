@@ -6,7 +6,15 @@
  * The hash/mtime describe the .mm ON DISK at the moment the tmp was
  * written, so on next open we can tell whether the mm changed externally.
  */
-export interface RecoveryEnvelope { xml: string; undo: string[]; redo: string[]; at: number; }
+export interface RecoveryEnvelope {
+  xml: string;
+  undo: string[];
+  redo: string[];
+  at: number;
+  mmPath?: string;
+  baseHash?: string;
+  baseMtime?: number;
+}
 export interface RecoveryCacheEntry { mmPath: string; hash: string; mtime: number; at: number; }
 
 /** FNV-1a 32-bit string hash (cheap, dependency-free). */

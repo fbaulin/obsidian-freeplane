@@ -27,7 +27,12 @@ const RICH_PAD_BOTTOM = 8;      // preview bottom padding
  * Returns nodes/edges for the renderer, an id index, tight content bounds
  * and a viewBox padded with a large pannable margin.
  */
-export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?: Record<string, { w: number; h: number }>) {
+export function layoutMap(
+  doc: Document,
+  richExpandedIds?: Set<string>,
+  mdSizes?: Record<string, { w: number; h: number }>,
+  imageSizes?: Record<string, { w: number; h: number }>
+) {
   const expanded = richExpandedIds || new Set<string>();
   const MAXSYM = settings.nodeMaxWidthSymbols;   // wrap width from settings.json    // visible previews
   const rootEl = childNodeElements(doc.documentElement)[0]; // the map root node
@@ -57,6 +62,12 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
 
     const id = el.getAttribute("ID") || "";
     const text = el.getAttribute("TEXT") || "";
+    const imageHook = Array.from(el.children).find((c) =>
+      c.nodeName.toLowerCase() === "hook" && c.getAttribute("NAME") === "ExternalObject"
+    );
+    const imageUri = imageHook?.getAttribute("URI") || "";
+    const imageScale = Math.max(0.05, Number(imageHook?.getAttribute("SIZE")) || 1);
+    const imageSize = imageUri ? (imageSizes || {})[id] || { w: 240, h: 160 } : null;
 
     const details = richContentSource(el, "DETAILS").trim(); // preview sources
     const note = richContentSource(el, "NOTE").trim();
@@ -111,15 +122,21 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
 
     const isMarkdown = needsMarkdown(text);                  // markdown pass?
     const mdSize = isMarkdown ? (mdSizes || {})[id] || null : null; // measured?
-    const titleHeight = isMarkdown
+    const textHeight = isMarkdown
       ? Math.max(NODE_H, mdSize ? mdSize.h : 48)             // measured height
       : 14 + textLines.length * 16;                          // 16px per line
+    const imageHeight = imageSize ? imageSize.h * imageScale + 12 : 0;
+    const titleHeight = textHeight + imageHeight;
     const nodeHeight = titleHeight + richHeight;
     const titleWidth = isMarkdown
       ? (mdSize ? mdSize.w : 220)                            // measured width
       : estimateWidth(longestLine);                          // canvas-measured
-    const richWidth = richExpanded ? MAXSYM * 6.4 + 34 : 0; // preview width
-    const width = Math.max(titleWidth, richWidth, 60);
+    const richLongest = richBlocks.flatMap((b) => b.lines).reduce(
+      (a: string, b: string) => (a.length >= b.length ? a : b), ""
+    );
+    const richWidth = richExpanded ? estimateWidth(richLongest) : 0;
+    const imageWidth = imageSize ? imageSize.w * imageScale + 20 : 0;
+    const width = Math.max(titleWidth, richWidth, imageWidth, 60);
 
     const children = visibleChildren.map((child) =>
       build(child, depth + 1, side, true)
@@ -138,6 +155,7 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
       width,
       height: nodeHeight,
       titleHeight,
+      textHeight,
       isMarkdown,
       lines: textLines,
       richBlocks,
@@ -147,6 +165,9 @@ export function layoutMap(doc: Document, richExpandedIds?: Set<string>, mdSizes?
       richExpanded,
       richFont: RICH_FONT,
       richLineH: RICH_LINE_H,
+      imageUri,
+      imageScale,
+      imageSize,
       x: 0,
       y: 0,
       children,

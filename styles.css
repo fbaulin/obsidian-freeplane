@@ -263,6 +263,11 @@
   fill: var(--text-accent);
   text-decoration: underline;
   cursor: pointer;
+  pointer-events: all;
+}
+
+.fp-node-image {
+  pointer-events: none;
 }
 
 .fp-canvas {

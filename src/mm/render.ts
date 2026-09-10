@@ -19,7 +19,7 @@ function svgEl(tag: string, attrs: Record<string, any> = {}): any {
 export function renderMap(
   svg: SVGSVGElement,
   layout: any,
-  selectedId: string | null,
+  selectedIds: Set<string>,
   handlers: any
 ) {
   svg.innerHTML = "";                              // full redraw each pass
@@ -42,12 +42,12 @@ export function renderMap(
     edgeLayer.appendChild(svgEl("path", { class: "fp-edge", d: edgePath(edge.from, edge.to) }));
   }
   for (const node of layout.nodes) {
-    nodeLayer.appendChild(renderNode(node, selectedId, handlers));
+    nodeLayer.appendChild(renderNode(node, selectedIds, handlers));
   }
 }
 
 /** Build one node group: box, title (or markdown), circles, preview. */
-function renderNode(n: any, selectedId: string | null, handlers: any): SVGGElement {
+function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElement {
   const g = svgEl("g", {
     class: "fp-node",
     transform: `translate(${n.x},${n.y})`,         // layout position
@@ -56,7 +56,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
     style: "cursor: grab;"
   });
 
-  if (n.id === selectedId) g.classList.add("selected");   // selection outline
+  if (selectedIds.has(n.id)) g.classList.add("selected"); // selection outline
 
   const rect = svgEl("rect", { width: n.width, height: n.height, rx: 7 });
   g.appendChild(rect);
@@ -68,7 +68,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
       x: 0,
       y: 0,
       width: n.width,
-      height: n.titleHeight
+      height: n.textHeight
     });
     const div = document.createElement("div");    // filled by the view's pass
     div.className = "fp-md";
@@ -78,12 +78,31 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
   } else {
     // left-aligned multiline title, 16px per line, vertically centered
     const lines = n.lines || [n.text];
-    const startY = n.titleHeight / 2 + 4 - (lines.length - 1) * 8;
+    const startY = n.textHeight / 2 + 4 - (lines.length - 1) * 8;
     lines.forEach((ln: string, i: number) => {
       const t = svgEl("text", { x: 10, y: startY + i * 16, "text-anchor": "start" });
       t.textContent = ln ? displayText(ln) : " ";
       g.appendChild(t);
     });
+  }
+
+  if (n.imageUri && n.imageSize) {
+    const iw = n.imageSize.w * n.imageScale;
+    const ih = n.imageSize.h * n.imageScale;
+    const image = svgEl("image", {
+      class: "fp-node-image",
+      x: (n.width - iw) / 2,
+      y: n.textHeight + 6,
+      width: iw,
+      height: ih,
+      preserveAspectRatio: "xMidYMid meet"
+    }) as SVGImageElement;
+    const url = handlers.imageUrl(n.imageUri);
+    if (url) {
+      image.addEventListener("load", () => handlers.imageLoaded(n.id, image));
+      image.setAttribute("href", url);
+    }
+    g.appendChild(image);
   }
 
   if (n.hasRich) {
@@ -133,7 +152,7 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
     const t = e.target as Element;
     if (t.closest && (t.closest(".fp-md a") || t.closest(".fp-rich-link"))) return;
     e.stopPropagation();
-    handlers.select(n.id);
+    handlers.select(n.id, e);
   });
 
   // double-click = rename (ignored on links / preview lines / separators)
@@ -165,6 +184,9 @@ function renderNode(n: any, selectedId: string | null, handlers: any): SVGGEleme
   g.addEventListener("contextmenu", (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    const target = e.target as Element;
+    const link = target.closest?.("a.internal-link, a.external-link, .fp-rich-link");
+    if (link) { handlers.linkContextMenu(link, e); return; }
     handlers.contextMenu(n.id, e);
   });
 

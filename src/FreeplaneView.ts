@@ -22,9 +22,12 @@ export class FreeplaneView extends FileView {
   history = new SnapshotHistory();
   layout: any = null;
   selectedId: string | null = null;
+  selectedIds = new Set<string>();
   lastRichClick: any = null;
   zoom = 1;
   mdSizes: Record<string, { w: number; h: number }> = {};
+  imageSizes: Record<string, { w: number; h: number }> = {};
+  imageLoads = new Set<string>();
   mdComponent: any = null;
   mdPass = 0;
   richExpanded = new Set<string>();
@@ -97,14 +100,17 @@ export class FreeplaneView extends FileView {
         return;
       }
       if (t.closest && t.closest(".fp-node")) return;
-      if (this.selectedId) { this.selectedId = null; this.renderAll(); }
+      if (this.selectedId) { this.clearSelection(); this.renderAll(); }
     });
 
     this.registerDomEvent(this.canvasEl, "contextmenu", (e: MouseEvent) => {
       const t = e.target as Element;
+      const link = t.closest?.("a.internal-link, a.external-link, .fp-rich-link");
+      if (link) { e.preventDefault(); this.openLinkMenu(link, e); return; }
       if (t.closest && t.closest(".fp-node")) return;
       e.preventDefault();
       const menu = new Menu();
+      menu.addItem((it) => it.setTitle("Show/hide details").onClick(() => this.toggleAllDetails()));
       menu.addItem((it) => it.setTitle("Fit map").onClick(() => this.fitMap()));
       menu.addItem((it) => it.setTitle("Center map").onClick(() => this.centerOnContent()));
       menu.showAtMouseEvent(e);
@@ -181,7 +187,7 @@ export class FreeplaneView extends FileView {
       case "freeplane:new-sibling-below": this.createSiblingAfterSelected(); break;
       case "freeplane:new-sibling-above": this.createSiblingBeforeSelected(); break;
       case "freeplane:new-child": this.createChildOfSelected(); break;
-      case "freeplane:delete": if (this.selectedId) this.deleteNode(this.selectedId); break;
+      case "freeplane:delete": if (this.selectedId) this.deleteSelectedNodes(); break;
     }
   }
 
@@ -240,13 +246,16 @@ export class FreeplaneView extends FileView {
       const rec = await this.checkRecovery(file, text);
       this.originalText = rec.mmText;
       this.doc = parseMm(rec.xml);
+      this.mdSizes = {};
+      this.imageSizes = {};
+      this.imageLoads.clear();
       this.syncRichExpanded();
       this.loadedPath = file.path;
       this.history.clear();
       this.history.undoStack = rec.undo.slice(0, 50);   // restored undo history
       this.history.redoStack = rec.redo.slice(0, 50);
       this.dirty = rec.dirty;
-      this.selectedId = null;
+      this.clearSelection();
       this.renderAll();
       this.centerOnContent();
       requestAnimationFrame(() => this.centerOnContent());
@@ -413,23 +422,104 @@ export class FreeplaneView extends FileView {
     this.svg.setAttribute("height", String(Math.round(this.layout.height * this.zoom)));
   }
 
+  clearSelection() { this.selectedId = null; this.selectedIds.clear(); }
+  selectOnly(id: string | null) {
+    this.selectedId = id;
+    this.selectedIds = id ? new Set([id]) : new Set();
+  }
+  selectNode(id: string, additive = false) {
+    if (!additive) {
+      if (this.selectedIds.size === 1 && this.selectedIds.has(id)) return;
+      this.selectOnly(id);
+    } else if (this.selectedIds.has(id)) {
+      this.selectedIds.delete(id);
+      if (this.selectedId === id) this.selectedId = Array.from(this.selectedIds).pop() || null;
+    } else {
+      this.selectedIds.add(id);
+      this.selectedId = id;
+    }
+    this.renderAll();
+  }
+
+  resolveImageUrl(uri: string): string {
+    if (!uri) return "";
+    try {
+      const decoded = decodeURIComponent(uri).replace(/^file:\/\//i, "");
+      const base = this.file?.parent?.path || "";
+      const parts = (decoded.startsWith("/") ? decoded.slice(1) : (base ? base + "/" : "") + decoded).split("/");
+      const clean: string[] = [];
+      for (const part of parts) { if (!part || part === ".") continue; if (part === "..") clean.pop(); else clean.push(part); }
+      const file = this.app.vault.getAbstractFileByPath(clean.join("/"));
+      return file instanceof TFile ? this.app.vault.getResourcePath(file) : "";
+    } catch { return ""; }
+  }
+  measureImage(id: string, url: string) {
+    if (!url || this.imageSizes[id] || this.imageLoads.has(id)) return;
+    this.imageLoads.add(id);
+    const probe = new Image();
+    probe.onload = () => {
+      this.imageLoads.delete(id);
+      const scale = Math.min(1, 480 / Math.max(1, probe.naturalWidth), 360 / Math.max(1, probe.naturalHeight));
+      this.imageSizes[id] = { w: Math.max(40, probe.naturalWidth * scale), h: Math.max(30, probe.naturalHeight * scale) };
+      this.renderAll();
+    };
+    probe.onerror = () => this.imageLoads.delete(id);
+    probe.src = url;
+  }
+
+  openLinkMenu(link: Element, e: MouseEvent) {
+    const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+    if (!href) return;
+    const menu = new Menu();
+    menu.addItem((it) => it.setTitle("Open").onClick(() => this.openLink(href, false)));
+    menu.addItem((it) => it.setTitle("Open in new tab").onClick(() => this.openLink(href, true)));
+    menu.addItem((it) => it.setTitle("Open with default app").onClick(() => this.openLinkDefault(href)));
+    menu.showAtMouseEvent(e);
+  }
+  openLink(href: string, newTab: boolean) {
+    if (/^(https?|mailto):/i.test(href)) { window.open(href, newTab ? "_blank" : "_self"); return; }
+    this.app.workspace.openLinkText(href, this.file?.path || "", newTab ? "tab" : false);
+  }
+  async openLinkDefault(href: string) {
+    if (/^(https?|mailto):/i.test(href)) { window.open(href, "_blank"); return; }
+    const target = (this.app.metadataCache as any).getFirstLinkpathDest(href, this.file?.path || "");
+    if (!(target instanceof TFile)) { new Notice("Linked file not found."); return; }
+    try {
+      const appAny = this.app as any;
+      const adapter = this.app.vault.adapter as any;
+      const fullPath = typeof adapter.getFullPath === "function" ? adapter.getFullPath(target.path) : target.path;
+      if (typeof appAny.openWithDefaultApp === "function") await appAny.openWithDefaultApp(fullPath);
+      else {
+        const electron = (window as any).require?.("electron");
+        if (!electron?.shell?.openPath) throw new Error("Desktop shell is unavailable");
+        const error = await electron.shell.openPath(fullPath);
+        if (error) throw new Error(error);
+      }
+    } catch (err: any) { new Notice("Could not open with the default app: " + (err?.message || err)); }
+  }
+
   renderAll() {
     if (!this.doc || !this.svg) return;
+    if (!this.selectedId) this.selectedIds.clear();
+    else if (!this.selectedIds.has(this.selectedId)) this.selectedIds = new Set([this.selectedId]);
     let anchor: { x: number; y: number } | null = null;
     if (this.svg.getAttribute("viewBox") && this.canvasEl.clientWidth > 0) {
       const r = this.canvasEl.getBoundingClientRect();
       anchor = clientToSvg(this.svg, r.left + r.width / 2, r.top + r.height / 2);
     }
-    this.layout = layoutMap(this.doc, this.richExpanded, this.mdSizes);
-    renderMap(this.svg, this.layout, this.selectedId, {
-      select: (id: string) => { if (this.selectedId !== id) { this.selectedId = id; this.renderAll(); } },
+    this.layout = layoutMap(this.doc, this.richExpanded, this.mdSizes, this.imageSizes);
+    renderMap(this.svg, this.layout, this.selectedIds, {
+      select: (id: string, e: MouseEvent) => this.selectNode(id, e.shiftKey),
       toggleFold: (id: string) => this.toggleFold(id),
       toggleRich: (id: string) => this.toggleRichPreview(id),
       startDrag: (id: string, e: PointerEvent) => this.startDrag(id, e),
       editText: (id: string) => this.startTextEdit(id),
       editRich: (id: string, type: "DETAILS" | "NOTE") => this.startRichEdit(id, type),
       richClick: (id: string, type: "DETAILS" | "NOTE") => this.richLineClicked(id, type),
-      contextMenu: (id: string, e: MouseEvent) => this.openNodeMenu(id, e)
+      contextMenu: (id: string, e: MouseEvent) => this.openNodeMenu(id, e),
+      linkContextMenu: (link: Element, e: MouseEvent) => this.openLinkMenu(link, e),
+      imageUrl: (uri: string) => this.resolveImageUrl(uri),
+      imageLoaded: (id: string, image: SVGImageElement) => this.measureImage(id, image.getAttribute("href") || "")
     });
     this.applyZoom();
     if (anchor) {
@@ -463,12 +553,13 @@ export class FreeplaneView extends FileView {
       return;
     }
     const el = nodeById(this.doc, this.selectedId);
-    if (!el) { this.selectedId = null; this.renderSidebar(); return; }
+    if (!el) { this.clearSelection(); this.renderSidebar(); return; }
     this.sidebarEl.createEl("h3", { text: "Node" });
     const idEl = this.sidebarEl.createEl("code");
     idEl.textContent = "ID: " + (el.getAttribute("ID") || "(none)");
     this.sidebarEl.createEl("label", { text: "Text" });
-    const textInput = this.sidebarEl.createEl("textarea", { rows: 3 }) as HTMLTextAreaElement;
+    const textInput = this.sidebarEl.createEl("textarea") as HTMLTextAreaElement;
+    textInput.rows = 3;
     this.attachSuggest(textInput);
     textInput.value = el.getAttribute("TEXT") || "";
     this.sidebarEl.createEl("label", { text: "DETAILS richcontent" });
@@ -536,25 +627,51 @@ export class FreeplaneView extends FileView {
   }
 
   openNodeMenu(id: string, e: MouseEvent) {
-    if (this.selectedId !== id) { this.selectedId = id; this.renderAll(); }
+    if (!this.selectedIds.has(id)) { this.selectOnly(id); this.renderAll(); }
     const menu = new Menu();
     menu.addItem((it) => it.setTitle("Rename").onClick(() => this.startTextEdit(id)));
     menu.addItem((it) => it.setTitle("Edit details").onClick(() => this.startRichEdit(id, "DETAILS")));
     menu.addItem((it) => it.setTitle("Edit note").onClick(() => this.startRichEdit(id, "NOTE")));
-    menu.addItem((it) => it.setTitle("Delete").onClick(() => this.deleteNode(id)));
+    menu.addItem((it) => it.setTitle(this.selectedIds.size > 1 ? "Delete selected" : "Delete").onClick(() => this.deleteSelectedNodes()));
     menu.addItem((it) => it.setTitle("Collapse all").onClick(() => this.collapseChildren(id)));
     menu.addItem((it) => it.setTitle("Expand all").onClick(() => this.expandAll(id)));
     menu.showAtMouseEvent(e);
   }
   deleteNode(id: string) {
-    if (!this.doc || !id) return;
-    const el = nodeById(this.doc, id);
-    if (!el) return;
-    const p = el.parentElement;
-    if (!p || p.nodeName.toLowerCase() !== "node") return;
+    this.selectOnly(id);
+    this.deleteSelectedNodes();
+  }
+  selectedTopNodes(): Element[] {
+    if (!this.doc) return [];
+    const all = Array.from(this.selectedIds).map((id) => nodeById(this.doc!, id)).filter((el): el is Element => !!el);
+    return all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
+  }
+  deleteSelectedNodes() {
+    if (!this.doc || !this.selectedId) return;
+    const nodes = this.selectedTopNodes();
+    if (!nodes.length) return;
+    const primary = nodeById(this.doc, this.selectedId) || nodes[nodes.length - 1];
+    const parent = primary.parentElement;
+    if (!parent || parent.nodeName.toLowerCase() !== "node") return;
+    const selected = new Set(nodes);
+    const siblings = this.nodeChildren(parent);
+    const index = siblings.indexOf(primary);
+    let nextSelection: Element | null = null;
+    for (let i = index - 1; i >= 0; i--) { if (!selected.has(siblings[i])) { nextSelection = siblings[i]; break; } }
+    if (!nextSelection) for (let i = index + 1; i < siblings.length; i++) { if (!selected.has(siblings[i])) { nextSelection = siblings[i]; break; } }
+    if (!nextSelection) nextSelection = parent;
     const before = serializeDoc(this.doc);
-    if (this.selectedId === id) this.selectedId = p.getAttribute("ID");
-    el.remove();
+    nodes.forEach((el) => el.remove());
+    this.selectOnly(nextSelection.getAttribute("ID"));
+    this.commit(before);
+  }
+  toggleAllDetails() {
+    if (!this.doc) return;
+    const rcs = Array.from(this.doc.querySelectorAll('richcontent[TYPE="DETAILS"], richcontent[TYPE="NOTE"]'));
+    if (!rcs.length) { new Notice("This map has no details or notes."); return; }
+    const show = rcs.some((rc) => rc.getAttribute("HIDDEN") === "true");
+    const before = serializeDoc(this.doc);
+    rcs.forEach((rc) => { if (show) rc.removeAttribute("HIDDEN"); else rc.setAttribute("HIDDEN", "true"); });
     this.commit(before);
   }
   collapseChildren(id: string) { this.setFoldRecursive(id, true); }
@@ -780,7 +897,14 @@ export class FreeplaneView extends FileView {
     e.preventDefault();
     const el = nodeById(this.doc, id);
     if (!el) return;
-    this.dragging = { id, el, startX: e.clientX, startY: e.clientY, started: false };
+    const wasSelected = this.selectedIds.has(id);
+    let els = wasSelected ? this.selectedTopNodes() : [el];
+    if (!wasSelected && e.shiftKey) {
+      const existing = this.selectedTopNodes();
+      els = [...existing, el].filter((n, i, all) => !all.some((other, j) => i !== j && other.contains(n)));
+    }
+    this.dragging = { id, el, ids: els.map((n) => n.getAttribute("ID") || ""), els, wasSelected, additive: e.shiftKey,
+      startX: e.clientX, startY: e.clientY, started: false };
   }
   onDragMove(e: PointerEvent) {
     if (!this.dragging || !this.layout) return;
@@ -788,6 +912,10 @@ export class FreeplaneView extends FileView {
       const dx = e.clientX - this.dragging.startX, dy = e.clientY - this.dragging.startY;
       if (Math.hypot(dx, dy) < 5) return;
       this.dragging.started = true;
+      if (!this.dragging.wasSelected) {
+        if (this.dragging.additive) { this.selectedIds.add(this.dragging.id); this.selectedId = this.dragging.id; }
+        else this.selectOnly(this.dragging.id);
+      }
       this.canvasEl.addClass("fp-dragging");
     }
     const pt = clientToSvg(this.svg, e.clientX, e.clientY);
@@ -801,9 +929,18 @@ export class FreeplaneView extends FileView {
     this.canvasEl.removeClass("fp-dragging");
     this.updateDropOverlay();
     if (!drag.started || !hint || !this.doc) return;
-    if (hint.id === drag.id) return;
+    this.suppressNextClick = true;
+    if (drag.ids.includes(hint.id)) return;
     const before = serializeDoc(this.doc);
-    const changed = moveNode(this.doc, drag.id, hint.id, hint.mode, hint.side);
+    const ordered = [...drag.els].sort((a: Element, b: Element) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+    );
+    if (hint.mode === "after") ordered.reverse();
+    let changed = false;
+    for (const el of ordered) {
+      const id = el.getAttribute("ID") || "";
+      changed = moveNode(this.doc, id, hint.id, hint.mode, hint.side) || changed;
+    }
     if (changed) this.commit(before); else this.renderAll();
   }
   hitTest(pt: { x: number; y: number }) {
@@ -814,8 +951,8 @@ export class FreeplaneView extends FileView {
       const pad = 20;
       const inside = pt.x >= n.x - pad && pt.x <= n.x + n.width + pad && pt.y >= n.y - pad && pt.y <= n.y + n.height + pad;
       if (!inside) continue;
-      if (n.id === this.dragging.id) continue;
-      if (this.dragging.el.contains(n.el)) continue;
+      if (this.dragging.ids.includes(n.id)) continue;
+      if (this.dragging.els.some((el: Element) => el.contains(n.el))) continue;
       let mode: "child" | "before" | "after" = "child";
       if (n.depth > 0) { const top = n.y + n.height * 0.25, bottom = n.y + n.height * 0.75; if (pt.y < top) mode = "before"; else if (pt.y > bottom) mode = "after"; }
       if (n.depth === 0 && mode !== "child") continue;
@@ -928,7 +1065,10 @@ export class FreeplaneView extends FileView {
         xml,
         undo: this.history.undoStack.slice(),
         redo: this.history.redoStack.slice(),
-        at: Date.now()
+        at: Date.now(),
+        mmPath: this.file.path,
+        baseHash: hashText(this.originalText),
+        baseMtime: (this.file as any).stat?.mtime || 0
       });
       const cache = await readCache(adapter, dir);
       cache[key] = {
@@ -966,7 +1106,12 @@ export class FreeplaneView extends FileView {
       if (!env || !env.xml) return none;
 
       const cache = (await readCache(adapter, dir))[key];
-      const same = !!cache && (cache.hash === hashText(text) || cache.mtime === ((file as any).stat?.mtime || 0));
+      // The content hash is authoritative. TFile.stat can be stale and some
+      // filesystems have coarse mtimes, so an mtime match must not suppress a
+      // genuine recovery conflict. New envelopes carry their own baseline so
+      // an interrupted cache.json write cannot make the recovery prompt vanish.
+      const baseHash = env.baseHash || cache?.hash;
+      const same = !!baseHash && baseHash === hashText(text);
 
       if (same) {
         // mm untouched since the stash: resume unsaved work silently
@@ -1021,7 +1166,7 @@ export class FreeplaneView extends FileView {
       this.syncRichExpanded();
       this.history.clear();
       this.dirty = false;
-      this.selectedId = null;
+      this.clearSelection();
       this.renderAll();
       this.centerOnContent();
       await this.clearRecovery();
@@ -1080,9 +1225,7 @@ class LinkSuggest {
   buildList() {
     const q = this.query.toLowerCase();
     const cur = this.view.file?.path;
-    let files: any[];
-    if (this.embed) files = this.view.app.vault.getAllLoadedFiles().filter((f: any) => f instanceof TFile && f.path !== cur);
-    else files = this.view.app.vault.getMarkdownFiles().filter((f: any) => f.path !== cur);
+    const files = this.view.app.vault.getAllLoadedFiles().filter((f: any) => f instanceof TFile && f.path !== cur);
     const hits = files.map((f) => ({ f, l: this.label(f) })).filter((x) => !q || x.l.toLowerCase().includes(q) || x.f.path.toLowerCase().includes(q));
     hits.sort((a, b) => { const as = a.l.toLowerCase().startsWith(q) ? 0 : 1, bs = b.l.toLowerCase().startsWith(q) ? 0 : 1; if (as !== bs) return as - bs; return a.l.length - b.l.length; });
     this.items = hits.slice(0, 8).map((x) => x.f);
