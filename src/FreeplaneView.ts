@@ -7,6 +7,8 @@ import { renderMap } from "./mm/render";
 import { askUnsaved } from "./ui/UnsavedPrompt";
 import { settings } from "./settings";
 import { matchAction } from "./hotkeys";
+import { hashText, recoveryKey, readEnvelope, writeEnvelope, readCache, writeCache, deleteRecovery } from "./recovery";
+import { askRecovery, askConfirm } from "./ui/RecoveryPrompt";
 
 export const VIEW_TYPE_FREEPLANE = "freeplane-mm-view";
 
@@ -38,6 +40,7 @@ export class FreeplaneView extends FileView {
   suppressNextClick = false;
   hoverLinkEl: any = null;
   hoverPop: any = null;
+  recoveryTimer = 0;
 
   constructor(leaf: WorkspaceLeaf, plugin: any) { super(leaf); this.plugin = plugin; }
   getViewType(): string { return VIEW_TYPE_FREEPLANE; }
@@ -183,10 +186,12 @@ export class FreeplaneView extends FileView {
   }
 
   async onUnloadFile(file: TFile) {
+    try { await this.flushRecovery(); } catch {}
     const proto: any = Object.getPrototypeOf(Object.getPrototypeOf(this));
     try { if (proto?.onUnloadFile) await proto.onUnloadFile.call(this, file); } catch (e) { console.error(e); }
   }
   async onClose() {
+    try { await this.flushRecovery(); } catch {}
     const proto: any = Object.getPrototypeOf(Object.getPrototypeOf(this));
     try { if (proto?.onClose) await proto.onClose.call(this); } catch (e) { console.error(e); }
   }
@@ -232,12 +237,15 @@ export class FreeplaneView extends FileView {
     try {
       (this as any).file = file;
       const text = await this.app.vault.read(file);
-      this.originalText = text;
-      this.doc = parseMm(text);
+      const rec = await this.checkRecovery(file, text);
+      this.originalText = rec.mmText;
+      this.doc = parseMm(rec.xml);
       this.syncRichExpanded();
       this.loadedPath = file.path;
       this.history.clear();
-      this.dirty = false;
+      this.history.undoStack = rec.undo.slice(0, 50);   // restored undo history
+      this.history.redoStack = rec.redo.slice(0, 50);
+      this.dirty = rec.dirty;
       this.selectedId = null;
       this.renderAll();
       this.centerOnContent();
@@ -446,6 +454,10 @@ export class FreeplaneView extends FileView {
       const zr = this.sidebarEl.createDiv({ cls: "fp-zoom-row" });
       zr.createEl("button", { text: "+" }).addEventListener("click", () => this.zoomStep(0.1));
       zr.createEl("button", { text: "−" }).addEventListener("click", () => this.zoomStep(-0.1));
+      if (this.dirty) {
+        const rbRow = this.sidebarEl.createDiv({ cls: "fp-zoom-row" });
+        rbRow.createEl("button", { text: "Roll back to last save" }).addEventListener("click", () => this.rollbackToSaved());
+      }
       this.sidebarEl.createEl("p", { text: "Select a node. Double-click to edit its text. Drag nodes to move them." });
       this.sidebarEl.createEl("p", { text: "Hotkeys are configured in hotkeys.json (plugin folder)." });
       return;
@@ -739,7 +751,7 @@ export class FreeplaneView extends FileView {
     setRichContent(this.doc, el, type, source);
     this.commit(before);
   }
-  commit(before: string) { this.history.push(before); this.dirty = true; this.syncRichExpanded(); this.renderAll(); }
+  commit(before: string) { this.history.push(before); this.dirty = true; this.syncRichExpanded(); this.renderAll(); this.scheduleRecovery(); }
   undo() { if (!this.doc) return; const c = serializeDoc(this.doc); const p = this.history.undo(c); if (!p) { new Notice("Nothing to undo."); return; } this.restoreSnapshot(p); }
   redo() { if (!this.doc) return; const c = serializeDoc(this.doc); const n = this.history.redo(c); if (!n) { new Notice("Nothing to redo."); return; } this.restoreSnapshot(n); }
   restoreSnapshot(xml: string) { try { this.doc = parseMm(xml); this.syncRichExpanded(); this.dirty = true; this.renderAll(); } catch { new Notice("Could not restore snapshot."); } }
@@ -757,6 +769,7 @@ export class FreeplaneView extends FileView {
       this.originalText = xml;
       this.dirty = false;
       this.lastSavedAt = Date.now();
+      await this.clearRecovery();
       new Notice("Saved Freeplane map.");
       (this.leaf as any).updateHeader?.();
     } finally { this.saving = false; }
@@ -893,6 +906,130 @@ export class FreeplaneView extends FileView {
     ta.focus();
     const tl2 = ta.value.length;
     ta.setSelectionRange(tl2, tl2);
+  }
+
+  /** Debounced stash write after every commit. */
+  scheduleRecovery() {
+    if (!this.doc || !this.file) return;
+    if (this.recoveryTimer) window.clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = window.setTimeout(() => { this.recoveryTimer = 0; this.flushRecovery(); }, 800);
+  }
+
+  /** Write current doc + undo/redo stacks to recovery/<map>.tmp + cache. */
+  async flushRecovery() {
+    if (this.recoveryTimer) { window.clearTimeout(this.recoveryTimer); this.recoveryTimer = 0; }
+    if (!this.doc || !this.file || !this.dirty) return;
+    try {
+      const dir = (this.plugin.manifest as any).dir || "";
+      const adapter = this.app.vault.adapter;
+      const key = recoveryKey(this.file.path);
+      const xml = serializeMm(this.doc, this.originalText);
+      await writeEnvelope(adapter, dir, key, {
+        xml,
+        undo: this.history.undoStack.slice(),
+        redo: this.history.redoStack.slice(),
+        at: Date.now()
+      });
+      const cache = await readCache(adapter, dir);
+      cache[key] = {
+        mmPath: this.file.path,
+        hash: hashText(this.originalText),        // mm-on-disk fingerprint
+        mtime: (this.file as any).stat?.mtime || 0,
+        at: Date.now()
+      };
+      await writeCache(adapter, dir, cache);
+    } catch (e) { console.error("Freeplane: recovery write failed", e); }
+  }
+
+  /** Remove this map's stash (after save / discard / save-as). */
+  async clearRecovery() {
+    if (this.recoveryTimer) { window.clearTimeout(this.recoveryTimer); this.recoveryTimer = 0; }
+    if (!this.file) return;
+    try {
+      const dir = (this.plugin.manifest as any).dir || "";
+      await deleteRecovery(this.app.vault.adapter, dir, recoveryKey(this.file.path));
+    } catch {}
+  }
+
+  /**
+   * On open: if a stash exists and the mm is unchanged (hash/mtime match),
+   * resume it silently with undo history. If the mm changed externally, ask:
+   * overwrite mm / save recovered as new mm / lose recovered changes.
+   */
+  async checkRecovery(file: TFile, text: string): Promise<{ xml: string; undo: string[]; redo: string[]; dirty: boolean; mmText: string }> {
+    const none = { xml: text, undo: [] as string[], redo: [] as string[], dirty: false, mmText: text };
+    try {
+      const dir = (this.plugin.manifest as any).dir || "";
+      const adapter = this.app.vault.adapter;
+      const key = recoveryKey(file.path);
+      const env = await readEnvelope(adapter, dir, key);
+      if (!env || !env.xml) return none;
+
+      const cache = (await readCache(adapter, dir))[key];
+      const same = !!cache && (cache.hash === hashText(text) || cache.mtime === ((file as any).stat?.mtime || 0));
+
+      if (same) {
+        // mm untouched since the stash: resume unsaved work silently
+        return { xml: env.xml, undo: env.undo || [], redo: env.redo || [], dirty: true, mmText: text };
+      }
+
+      const choice = await askRecovery(this.app, file.name);
+
+      if (choice === "overwrite") {
+        await this.app.vault.modify(file, env.xml);
+        await deleteRecovery(adapter, dir, key);
+        new Notice("Recovered changes written over " + file.name);
+        return { xml: env.xml, undo: env.undo || [], redo: env.redo || [], dirty: false, mmText: env.xml };
+      }
+
+      if (choice === "saveas") {
+        const base = file.parent ? file.parent.path : "";
+        const name = file.basename + " recovered";
+        let p = (base ? base + "/" : "") + name + ".mm";
+        let i = 1;
+        while (this.app.vault.getAbstractFileByPath(p)) { p = (base ? base + "/" : "") + name + " " + i + ".mm"; i++; }
+        await this.app.vault.create(p, env.xml);
+        await deleteRecovery(adapter, dir, key);
+        new Notice("Recovered changes saved as " + p);
+        return none;
+      }
+
+      await deleteRecovery(adapter, dir, key);
+      new Notice("Recovered changes discarded for " + file.name);
+      return none;
+    } catch (e) {
+      console.error("Freeplane: recovery check failed", e);
+      return none;
+    }
+  }
+
+  /** Discard unsaved changes: reload from disk, clear history + recovery stash. */
+  async rollbackToSaved() {
+    if (!this.doc || !this.file) return;
+    if (!this.dirty) { new Notice("No unsaved changes to roll back."); return; }
+    const ok = await askConfirm(
+      this.app,
+      "Roll back to last save?",
+      "All unsaved changes (and the recovery stash) will be discarded.",
+      "Roll back"
+    );
+    if (!ok) return;
+    try {
+      const text = await this.app.vault.read(this.file);
+      this.originalText = text;
+      this.doc = parseMm(text);
+      this.syncRichExpanded();
+      this.history.clear();
+      this.dirty = false;
+      this.selectedId = null;
+      this.renderAll();
+      this.centerOnContent();
+      await this.clearRecovery();
+      new Notice("Rolled back to the last saved state.");
+    } catch (e) {
+      console.error("Freeplane: rollback failed", e);
+      new Notice("Rollback failed.");
+    }
   }
 
   attachSuggest(input: any) { new LinkSuggest(this, input); }

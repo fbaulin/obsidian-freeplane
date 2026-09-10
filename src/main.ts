@@ -1,5 +1,6 @@
 import { Plugin, TFolder } from "obsidian";
 import { FreeplaneView, VIEW_TYPE_FREEPLANE } from "./FreeplaneView";
+import { readCache, writeCache } from "./recovery";
 import { applySettings, DEFAULT_SETTINGS } from "./settings";
 import { setHotkeys, HOTKEYS_FILE_DEFAULT } from "./hotkeys";
 
@@ -10,6 +11,7 @@ export default class FreeplanePlugin extends Plugin {
 
     // settings.json + hotkeys.json from the plugin folder (created if missing)
     await this.loadConfigFiles();
+    await this.cleanupRecovery();
 
     this.registerEvent(
       (this.app.workspace as any).on("file-menu", (menu: any, file: any) => {
@@ -68,6 +70,30 @@ export default class FreeplanePlugin extends Plugin {
       '<edge STYLE="sharp"/>\n</node>\n</map>\n';
     const file = await this.app.vault.create(path, content);
     await this.app.workspace.getLeaf(false).openFile(file);
+  }
+
+  /** Drop recovery entries (tmp + cache) whose .mm no longer exists. */
+  async cleanupRecovery() {
+    try {
+      const dir = (this.manifest as any).dir || "";
+      const adapter = this.app.vault.adapter;
+      const cache = await readCache(adapter, dir);
+      let changed = false;
+      for (const key of Object.keys(cache)) {
+        const entry = cache[key];
+        if (!entry || !entry.mmPath || !this.app.vault.getAbstractFileByPath(entry.mmPath)) {
+          delete cache[key];
+          changed = true;
+          try {
+            const tmp = dir + "/recovery/" + key + ".tmp";
+            if (await adapter.exists(tmp)) await adapter.remove(tmp);
+          } catch {}
+        }
+      }
+      if (changed) await writeCache(adapter, dir, cache);
+    } catch (e) {
+      console.error("Freeplane: recovery cleanup failed", e);
+    }
   }
 
   onunload() { this.app.workspace.detachLeavesOfType(VIEW_TYPE_FREEPLANE); }
