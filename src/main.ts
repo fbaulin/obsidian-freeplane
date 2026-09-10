@@ -43,8 +43,14 @@ export default class FreeplanePlugin extends Plugin {
     const adapter = this.app.vault.adapter;
     try {
       const sp = dir + "/settings.json";
-      if (await adapter.exists(sp)) applySettings(JSON.parse(await adapter.read(sp)));
-      else await adapter.write(sp, JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n");
+      if (await adapter.exists(sp)) {
+        const loaded = JSON.parse(await adapter.read(sp));
+        applySettings(loaded);
+        const merged = { ...DEFAULT_SETTINGS, ...loaded };
+        if (Object.keys(DEFAULT_SETTINGS).some((key) => !(key in loaded))) {
+          await adapter.write(sp, JSON.stringify(merged, null, 2) + "\n");
+        }
+      } else await adapter.write(sp, JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n");
     } catch (e) { console.error("Freeplane: settings.json", e); }
     try {
       const hp = dir + "/hotkeys.json";

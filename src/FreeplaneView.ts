@@ -40,6 +40,7 @@ export class FreeplaneView extends FileView {
   dragging: any = null;
   dropHint: any = null;
   panning: any = null;
+  touchGesture: any = null;
   suppressNextClick = false;
   hoverLinkEl: any = null;
   hoverPop: any = null;
@@ -78,13 +79,25 @@ export class FreeplaneView extends FileView {
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onDragMove(e));
     this.registerDomEvent(document, "pointerup", (e: PointerEvent) => this.onDragEnd(e));
     this.registerDomEvent(this.canvasEl, "wheel", (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
       e.preventDefault();
-      const step = e.deltaY > 0 ? -0.1 : 0.1;
-      const nz = Math.min(3, Math.max(0.3, Math.round((this.zoom + step) * 100) / 100));
-      if (nz === this.zoom) return;
-      this.zoomAt(nz, e);
+      const scale = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.canvasEl.clientHeight : 1;
+      let dx = e.deltaX * scale, dy = e.deltaY * scale;
+      if (e.ctrlKey || e.metaKey) {
+        const nz = Math.min(3, Math.max(0.1, this.zoom * Math.exp(-dy * 0.002 * settings.touchpadZoomSpeed)));
+        this.zoomAt(Math.round(nz * 1000) / 1000, e);
+        return;
+      }
+      if (e.shiftKey && Math.abs(dx) < 0.01) { dx = dy; dy = 0; }
+      this.canvasEl.scrollLeft += dx * settings.touchpadPanSpeed;
+      this.canvasEl.scrollTop += dy * settings.touchpadPanSpeed;
     }, { passive: false } as any);
+
+    // Native touch events keep delivering the full gesture on Windows touch
+    // screens, where browser pointer streams may be cancelled after one step.
+    this.registerDomEvent(this.canvasEl, "touchstart", (e: TouchEvent) => this.onTouchStart(e), { passive: false } as any);
+    this.registerDomEvent(this.canvasEl, "touchmove", (e: TouchEvent) => this.onTouchMove(e), { passive: false } as any);
+    this.registerDomEvent(this.canvasEl, "touchend", (e: TouchEvent) => this.onTouchEnd(e), { passive: false } as any);
+    this.registerDomEvent(this.canvasEl, "touchcancel", (e: TouchEvent) => this.onTouchEnd(e), { passive: false } as any);
 
     this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
       if (this.suppressNextClick) { this.suppressNextClick = false; return; }
@@ -117,6 +130,7 @@ export class FreeplaneView extends FileView {
     });
 
     this.registerDomEvent(this.canvasEl, "pointerdown", (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
       if (e.button !== 0) return;
       const t = e.target as Element;
       if (t.closest && (t.closest(".fp-node") || t.closest(".fp-inline-edit") || t.closest("a"))) return;
@@ -318,11 +332,11 @@ export class FreeplaneView extends FileView {
     this.zoomAt(nz, { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 } as any);
   }
 
-  zoomAt(newZoom: number, e?: WheelEvent) {
+  zoomAt(newZoom: number, e?: { clientX: number; clientY: number }) {
     if (!this.svg || !this.layout) { this.zoom = newZoom; this.applyZoom(); return; }
     let u: { x: number; y: number } | null = null;
-    if (this.selectedId) { const n = this.layout.byId[this.selectedId]; if (n) u = { x: n.x + n.width / 2, y: n.y + n.titleHeight / 2 }; }
-    if (!u && e) u = clientToSvg(this.svg, e.clientX, e.clientY);
+    if (e) u = clientToSvg(this.svg, e.clientX, e.clientY);
+    if (!u && this.selectedId) { const n = this.layout.byId[this.selectedId]; if (n) u = { x: n.x + n.width / 2, y: n.y + n.titleHeight / 2 }; }
     let before: { x: number; y: number } | null = null;
     const c = this.canvasEl.getBoundingClientRect();
     if (u) {
@@ -343,6 +357,44 @@ export class FreeplaneView extends FileView {
         this.canvasEl.scrollTop += after.y - before.y;
       }
     }
+  }
+
+  touchState(e: TouchEvent) {
+    const pts = Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));
+    if (!pts.length) return null;
+    const a = pts[0], b = pts[1] || a;
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y), count: pts.length };
+  }
+
+  onTouchStart(e: TouchEvent) {
+    if (e.touches.length >= 2) e.preventDefault();
+    this.hidePreview();
+    this.touchGesture = { ...this.touchState(e), moved: this.touchGesture?.moved || false, travel: this.touchGesture?.travel || 0 };
+  }
+
+  onTouchMove(e: TouchEvent) {
+    e.preventDefault();
+    const prev = this.touchGesture;
+    const cur = this.touchState(e);
+    if (!prev || !cur) { this.touchGesture = cur; return; }
+    const dx = cur.x - prev.x, dy = cur.y - prev.y;
+    if (cur.count >= 2 && prev.count >= 2 && prev.distance > 0) {
+      const ratio = Math.pow(cur.distance / prev.distance, settings.touchscreenZoomSpeed);
+      const nz = Math.min(3, Math.max(0.1, this.zoom * ratio));
+      this.zoomAt(Math.round(nz * 1000) / 1000, { clientX: prev.x, clientY: prev.y });
+    }
+    this.canvasEl.scrollLeft -= dx * settings.touchscreenPanSpeed;
+    this.canvasEl.scrollTop -= dy * settings.touchscreenPanSpeed;
+    const travel = (prev.travel || 0) + Math.hypot(dx, dy);
+    const moved = prev.moved || travel > 4 || (cur.count >= 2 && Math.abs(cur.distance - prev.distance) > 1);
+    if (moved) { this.suppressNextClick = true; this.canvasEl.addClass("fp-panning"); }
+    this.touchGesture = { ...cur, moved, travel };
+  }
+
+  onTouchEnd(e: TouchEvent) {
+    const cur = this.touchState(e);
+    this.touchGesture = cur ? { ...cur, moved: this.touchGesture?.moved || false, travel: this.touchGesture?.travel || 0 } : null;
+    if (!cur) this.canvasEl.removeClass("fp-panning");
   }
 
   onLinkHoverOver(e: MouseEvent) {
@@ -893,6 +945,7 @@ export class FreeplaneView extends FileView {
   }
 
   startDrag(id: string, e: PointerEvent) {
+    if (e.pointerType === "touch") return;
     if (!this.doc || e.button !== 0) return;
     e.preventDefault();
     const el = nodeById(this.doc, id);
