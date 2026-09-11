@@ -72,6 +72,8 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     });
     const div = document.createElement("div");    // filled by the view's pass
     div.className = "fp-md";
+    if (n.fontBold) div.style.fontWeight = "700";
+    if (n.fontItalic) div.style.fontStyle = "italic";
     div.setAttribute("data-id", n.id);
     fo.appendChild(div);
     g.appendChild(fo);
@@ -80,7 +82,8 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     const lines = n.lines || [n.text];
     const startY = n.textHeight / 2 + 4 - (lines.length - 1) * 8;
     lines.forEach((ln: string, i: number) => {
-      const t = svgEl("text", { x: 10, y: startY + i * 16, "text-anchor": "start" });
+      const t = svgEl("text", { x: 10, y: startY + i * 16, "text-anchor": "start",
+        ...(n.fontBold ? { "font-weight": "700" } : {}), ...(n.fontItalic ? { "font-style": "italic" } : {}) });
       t.textContent = ln ? displayText(ln) : " ";
       g.appendChild(t);
     });
@@ -223,8 +226,8 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
         "data-type": block.type
       });
 
-      // split line into plain parts and [[...]] / ![[...]] link parts
-      const parts = (line || " ").split(/(!?\[\[[^\]\n]*\]\])/g);
+      // Render links and lightweight Markdown emphasis as SVG tspans.
+      const parts = (line || " ").split(/(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g);
       for (const part of parts) {
         if (!part) continue;
         const m = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
@@ -233,8 +236,12 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
           ts.textContent = m[2];                   // show name without brackets
           t.appendChild(ts);
         } else {
-          const ts = svgEl("tspan");
-          ts.textContent = part;
+          const both = /^\*\*\*([^*\n]+)\*\*\*$/.exec(part);
+          const bold = /^\*\*([^*\n]+)\*\*$/.exec(part) || /^__([^_\n]+)__$/.exec(part);
+          const italic = /^\*([^*\n]+)\*$/.exec(part) || /^_([^_\n]+)_$/.exec(part);
+          const ts = svgEl("tspan", both ? { "font-weight": "700", "font-style": "italic" }
+            : bold ? { "font-weight": "700" } : italic ? { "font-style": "italic" } : {});
+          ts.textContent = both?.[1] || bold?.[1] || italic?.[1] || part;
           t.appendChild(ts);
         }
       }

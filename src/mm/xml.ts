@@ -76,6 +76,25 @@ export function serializeMm(doc: Document, originalText: string): string {
   return xml;
 }
 
+/** Serialize complete node subtrees for application/x-freeplane-node+xml. */
+export function serializeNodeClipboard(nodes: Element[]): string {
+  const serializer = new XMLSerializer();
+  return nodes.map((node) => serializer.serializeToString(node).replace(/&#10;/g, "&#xa;")).join("\n");
+}
+
+/** Parse one or more raw <node> fragments (or a full <map>) from a clipboard. */
+export function parseNodeClipboard(text: string): Element[] {
+  const source = htmlEntityToNumeric(String(text).replace(/^\s*<\?xml[\s\S]*?\?>\s*/, ""));
+  const doc = new DOMParser().parseFromString("<clipboard>" + source + "</clipboard>", "application/xml");
+  const parserError = doc.getElementsByTagName("parsererror")[0] || doc.querySelector("parsererror");
+  if (parserError) throw new Error(parserError.textContent || "Invalid clipboard XML");
+  const direct = Array.from(doc.documentElement.children);
+  const nodes = direct.filter((el) => el.nodeName.toLowerCase() === "node");
+  if (nodes.length) return nodes;
+  const map = direct.find((el) => el.nodeName.toLowerCase() === "map");
+  return map ? childNodeElements(map) : [];
+}
+
 /** Direct `<node>` children of an element (ignores richcontent, font, ...). */
 export function childNodeElements(el: Element): Element[] {
   return Array.from(el.children).filter(
@@ -156,6 +175,26 @@ export function richContentSource(nodeEl: Element, type: string): string {
   return Array.from(rc.childNodes)
     .map((child) => serializer.serializeToString(child))
     .join("");
+}
+
+/** Plain preview text with XHTML bold/italic converted to Markdown markers. */
+export function richContentPreviewSource(nodeEl: Element, type: string): string {
+  const rc = findRichcontent(nodeEl, type);
+  if (!rc) return "";
+  const body = rc.getElementsByTagName("body")[0] || rc;
+  const walk = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || "";
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const el = node as Element;
+    const tag = el.nodeName.toLowerCase();
+    const inner = Array.from(el.childNodes).map(walk).join("");
+    if (tag === "b" || tag === "strong") return "**" + inner + "**";
+    if (tag === "i" || tag === "em") return "*" + inner + "*";
+    if (tag === "br") return "\n";
+    if (tag === "p" || tag === "div") return inner + "\n";
+    return inner;
+  };
+  return Array.from(body.childNodes).map(walk).join("").replace(/\n+$/, "");
 }
 
 /**

@@ -1,6 +1,6 @@
 import { FileView, TFile, Notice, WorkspaceLeaf, Menu, MarkdownRenderer, Component } from "obsidian";
 import { SnapshotHistory } from "./history";
-import { parseMm, serializeDoc, serializeMm, nodeById, setText, toggleFolded, richContentSource, setRichContent, moveNode } from "./mm/xml";
+import { parseMm, serializeDoc, serializeMm, serializeNodeClipboard, parseNodeClipboard, nodeById, setText, toggleFolded, richContentSource, setRichContent, moveNode } from "./mm/xml";
 import { layoutMap } from "./mm/layout";
 import { toMarkdown } from "./mm/md";
 import { renderMap } from "./mm/render";
@@ -40,7 +40,10 @@ export class FreeplaneView extends FileView {
   dragging: any = null;
   dropHint: any = null;
   panning: any = null;
+  areaSelecting: any = null;
   touchGesture: any = null;
+  lastChildByParent = new Map<string, string>();
+  pendingClipboardCut = false;
   suppressNextClick = false;
   hoverLinkEl: any = null;
   hoverPop: any = null;
@@ -76,8 +79,14 @@ export class FreeplaneView extends FileView {
       this.runAction(action);
     }, true);
 
+    this.registerDomEvent(window, "copy", (e: ClipboardEvent) => this.onClipboardCopy(e, false));
+    this.registerDomEvent(window, "cut", (e: ClipboardEvent) => this.onClipboardCopy(e, true));
+    this.registerDomEvent(window, "paste", (e: ClipboardEvent) => this.onClipboardPaste(e));
+
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onDragMove(e));
     this.registerDomEvent(document, "pointerup", (e: PointerEvent) => this.onDragEnd(e));
+    this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onAreaSelectMove(e));
+    this.registerDomEvent(document, "pointerup", () => this.onAreaSelectEnd());
     this.registerDomEvent(this.canvasEl, "wheel", (e: WheelEvent) => {
       e.preventDefault();
       const scale = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.canvasEl.clientHeight : 1;
@@ -136,6 +145,7 @@ export class FreeplaneView extends FileView {
       if (t.closest && (t.closest(".fp-node") || t.closest(".fp-inline-edit") || t.closest("a"))) return;
       if (this.isEditableTarget(e.target)) return;
       this.hidePreview();
+      if (e.shiftKey) { this.startAreaSelection(e); return; }
       this.panning = { startX: e.clientX, startY: e.clientY, scrollLeft: this.canvasEl.scrollLeft, scrollTop: this.canvasEl.scrollTop, moved: false };
     });
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => {
@@ -194,6 +204,10 @@ export class FreeplaneView extends FileView {
       case "freeplane:nav-down": this.selectSiblingNav(1); break;
       case "freeplane:nav-left": this.selectParentNav(); break;
       case "freeplane:nav-right": this.selectFirstChildNav(); break;
+      case "freeplane:select-up": this.extendSiblingSelection(-1); break;
+      case "freeplane:select-down": this.extendSiblingSelection(1); break;
+      case "freeplane:select-left": this.extendParentSelection(); break;
+      case "freeplane:select-right": this.extendChildSelection(); break;
       case "freeplane:move-up": this.moveSelectedSibling(-1); break;
       case "freeplane:move-down": this.moveSelectedSibling(1); break;
       case "freeplane:promote": this.promoteSelected(); break;
@@ -263,6 +277,7 @@ export class FreeplaneView extends FileView {
       this.mdSizes = {};
       this.imageSizes = {};
       this.imageLoads.clear();
+      this.lastChildByParent.clear();
       this.syncRichExpanded();
       this.loadedPath = file.path;
       this.history.clear();
@@ -395,6 +410,57 @@ export class FreeplaneView extends FileView {
     const cur = this.touchState(e);
     this.touchGesture = cur ? { ...cur, moved: this.touchGesture?.moved || false, travel: this.touchGesture?.travel || 0 } : null;
     if (!cur) this.canvasEl.removeClass("fp-panning");
+  }
+
+  startAreaSelection(e: PointerEvent) {
+    e.preventDefault();
+    const start = clientToSvg(this.svg, e.clientX, e.clientY);
+    const base = new Set(this.selectedIds);
+    if (this.selectedId) base.add(this.selectedId);
+    this.areaSelecting = { start, current: start, base, moved: false };
+  }
+  onAreaSelectMove(e: PointerEvent) {
+    if (!this.areaSelecting || e.pointerType === "touch") return;
+    e.preventDefault();
+    const cur = clientToSvg(this.svg, e.clientX, e.clientY);
+    this.areaSelecting.current = cur;
+    if (!this.areaSelecting.moved && Math.hypot(cur.x - this.areaSelecting.start.x, cur.y - this.areaSelecting.start.y) < 4 / this.zoom) return;
+    this.areaSelecting.moved = true;
+    this.updateAreaSelectionOverlay();
+  }
+  updateAreaSelectionOverlay() {
+    const a = this.areaSelecting;
+    let rect = this.svg.querySelector("#fp-area-select") as SVGRectElement | null;
+    if (!a?.moved) { rect?.remove(); return; }
+    if (!rect) {
+      rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.id = "fp-area-select"; rect.setAttribute("class", "fp-area-select");
+      rect.style.fill = "var(--interactive-accent)";
+      rect.style.fillOpacity = "0.12";
+      rect.style.stroke = "var(--interactive-accent)";
+      this.svg.appendChild(rect);
+    }
+    const x = Math.min(a.start.x, a.current.x), y = Math.min(a.start.y, a.current.y);
+    rect.setAttribute("x", String(x)); rect.setAttribute("y", String(y));
+    rect.setAttribute("width", String(Math.abs(a.current.x - a.start.x)));
+    rect.setAttribute("height", String(Math.abs(a.current.y - a.start.y)));
+  }
+  onAreaSelectEnd() {
+    const a = this.areaSelecting;
+    if (!a) return;
+    this.areaSelecting = null;
+    this.svg.querySelector("#fp-area-select")?.remove();
+    if (!a.moved || !this.layout) return;
+    const x1 = Math.min(a.start.x, a.current.x), x2 = Math.max(a.start.x, a.current.x);
+    const y1 = Math.min(a.start.y, a.current.y), y2 = Math.max(a.start.y, a.current.y);
+    const selected = new Set<string>(a.base);
+    for (const n of this.layout.nodes) {
+      if (n.x <= x2 && n.x + n.width >= x1 && n.y <= y2 && n.y + n.height >= y1) selected.add(n.id);
+    }
+    this.selectedIds = selected;
+    if (!this.selectedId || !selected.has(this.selectedId)) this.selectedId = Array.from(selected).pop() || null;
+    this.suppressNextClick = true;
+    this.renderAll();
   }
 
   onLinkHoverOver(e: MouseEvent) {
@@ -636,6 +702,55 @@ export class FreeplaneView extends FileView {
     if (last && last.id === id && last.type === type && now - last.time < 450) { this.lastRichClick = null; this.startRichEdit(id, type); }
     else this.lastRichClick = { id, type, time: now };
   }
+  extendSelectionTo(id: string | null) {
+    if (!id || !this.selectedId || id === this.selectedId) return;
+    const current = this.selectedId;
+    if (!this.selectedIds.has(current)) this.selectedIds.add(current);
+    if (this.selectedIds.has(id)) this.selectedIds.delete(current);
+    else this.selectedIds.add(id);
+    this.selectedId = id;
+    this.renderAll();
+  }
+  extendSiblingSelection(dir: -1 | 1) {
+    if (!this.doc || !this.selectedId) return;
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el?.parentElement) return;
+    const sibs = this.nodeChildren(el.parentElement);
+    const idx = sibs.indexOf(el);
+    if (idx >= 0 && sibs.length > 1) this.extendSelectionTo(sibs[(idx + dir + sibs.length) % sibs.length].getAttribute("ID"));
+  }
+  rememberChild(parent: Element, child: Element) {
+    const parentId = parent.getAttribute("ID"), childId = child.getAttribute("ID");
+    if (parentId && childId) this.lastChildByParent.set(parentId, childId);
+  }
+  preferredChild(parent: Element): Element | null {
+    const children = this.nodeChildren(parent);
+    const parentId = parent.getAttribute("ID");
+    const childId = parentId ? this.lastChildByParent.get(parentId) : null;
+    return (childId ? children.find((child) => child.getAttribute("ID") === childId) : null) || children[0] || null;
+  }
+  extendParentSelection() {
+    if (!this.doc || !this.selectedId) return;
+    const child = nodeById(this.doc, this.selectedId);
+    const parent = child?.parentElement;
+    if (child && parent?.nodeName.toLowerCase() === "node") {
+      this.rememberChild(parent, child);
+      this.extendSelectionTo(parent.getAttribute("ID"));
+    }
+  }
+  extendChildSelection() {
+    if (!this.doc || !this.selectedId) return;
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el) return;
+    const child = this.preferredChild(el);
+    if (!child) return;
+    if (el.getAttribute("FOLDED") === "true") {
+      const before = serializeDoc(this.doc);
+      el.removeAttribute("FOLDED");
+      this.extendSelectionTo(child.getAttribute("ID"));
+      this.history.push(before); this.dirty = true; this.scheduleRecovery();
+    } else this.extendSelectionTo(child.getAttribute("ID"));
+  }
   selectSiblingNav(dir: -1 | 1) {
     if (!this.doc || !this.selectedId) return;
     const el = nodeById(this.doc, this.selectedId);
@@ -653,7 +768,11 @@ export class FreeplaneView extends FileView {
     const p = el.parentElement;
     if (!p || p.nodeName.toLowerCase() !== "node") return;
     const id = p.getAttribute("ID");
-    if (id) { this.selectedId = id; this.renderAll(); }
+    if (id) {
+      this.rememberChild(p, el);
+      this.selectedId = id;
+      this.renderAll();
+    }
   }
   selectFirstChildNav() {
     if (!this.doc || !this.selectedId) return;
@@ -662,8 +781,8 @@ export class FreeplaneView extends FileView {
     const before = serializeDoc(this.doc);
     let changed = false;
     if (el.getAttribute("FOLDED") === "true") { el.removeAttribute("FOLDED"); changed = true; }
-    const first = this.nodeChildren(el)[0];
-    if (!first) {
+    const child = this.preferredChild(el);
+    if (!child) {
       const p = el.parentElement;
       if (p && p.nodeName.toLowerCase() === "node") {
         const sibs = this.nodeChildren(p);
@@ -673,8 +792,8 @@ export class FreeplaneView extends FileView {
       }
       return;
     }
-    if (first.getAttribute("FOLDED") === "true") { first.removeAttribute("FOLDED"); changed = true; }
-    this.selectedId = first.getAttribute("ID");
+    if (child.getAttribute("FOLDED") === "true") { child.removeAttribute("FOLDED"); changed = true; }
+    this.selectedId = child.getAttribute("ID");
     if (changed) this.commit(before); else this.renderAll();
   }
 
@@ -684,6 +803,9 @@ export class FreeplaneView extends FileView {
     menu.addItem((it) => it.setTitle("Rename").onClick(() => this.startTextEdit(id)));
     menu.addItem((it) => it.setTitle("Edit details").onClick(() => this.startRichEdit(id, "DETAILS")));
     menu.addItem((it) => it.setTitle("Edit note").onClick(() => this.startRichEdit(id, "NOTE")));
+    menu.addItem((it) => it.setTitle(this.selectedIds.size > 1 ? "Copy selected" : "Copy").onClick(() => this.copyToSystemClipboard(false)));
+    menu.addItem((it) => it.setTitle(this.selectedIds.size > 1 ? "Cut selected" : "Cut").onClick(() => this.copyToSystemClipboard(true)));
+    menu.addItem((it) => it.setTitle("Paste as children").onClick(() => this.pasteFromSystemClipboard()));
     menu.addItem((it) => it.setTitle(this.selectedIds.size > 1 ? "Delete selected" : "Delete").onClick(() => this.deleteSelectedNodes()));
     menu.addItem((it) => it.setTitle("Collapse all").onClick(() => this.collapseChildren(id)));
     menu.addItem((it) => it.setTitle("Expand all").onClick(() => this.expandAll(id)));
@@ -696,7 +818,124 @@ export class FreeplaneView extends FileView {
   selectedTopNodes(): Element[] {
     if (!this.doc) return [];
     const all = Array.from(this.selectedIds).map((id) => nodeById(this.doc!, id)).filter((el): el is Element => !!el);
-    return all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
+    return all.filter((el) => !all.some((other) => other !== el && other.contains(el))).sort((a, b) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+    );
+  }
+
+  clipboardOutline(): string {
+    const lines: string[] = [];
+    const visit = (el: Element, depth: number) => {
+      let text = (el.getAttribute("TEXT") || "").replace(/[\r\n\t]+/g, " ");
+      if (/^\\latex\s*/.test(text)) text = text.replace(/^\\latex\s*/, "");
+      else {
+        const font = Array.from(el.children).find((c) => c.nodeName.toLowerCase() === "font");
+        const bold = font?.getAttribute("BOLD") === "true", italic = font?.getAttribute("ITALIC") === "true";
+        if (bold && italic) text = "***" + text + "***";
+        else if (bold) text = "**" + text + "**";
+        else if (italic) text = "*" + text + "*";
+      }
+      lines.push("\t".repeat(depth) + text);
+      this.nodeChildren(el).forEach((child) => visit(child, depth + 1));
+    };
+    this.selectedTopNodes().forEach((el) => visit(el, 0));
+    return lines.join("\n");
+  }
+  onClipboardCopy(e: ClipboardEvent, cut: boolean) {
+    if (this.app.workspace.activeLeaf !== this.leaf || this.isEditableTarget(e.target) || !this.selectedId) return;
+    cut = cut || this.pendingClipboardCut;
+    this.pendingClipboardCut = false;
+    const text = this.clipboardOutline();
+    if (!text || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData("application/x-freeplane-node+xml", serializeNodeClipboard(this.selectedTopNodes()));
+    e.clipboardData.setData("text/plain", text);
+    if (cut) this.deleteSelectedNodes();
+  }
+  onClipboardPaste(e: ClipboardEvent) {
+    if (this.app.workspace.activeLeaf !== this.leaf || this.isEditableTarget(e.target) || !this.selectedId) return;
+    const xml = e.clipboardData?.getData("application/x-freeplane-node+xml") || "";
+    const text = e.clipboardData?.getData("text/plain") || "";
+    if (!xml.trim() && !text.trim()) return;
+    e.preventDefault();
+    if (!xml.trim() || !this.pasteNodeXml(xml)) this.pasteOutline(text);
+  }
+  copyToSystemClipboard(cut: boolean) {
+    if (!this.clipboardOutline()) return;
+    this.pendingClipboardCut = cut;
+    try {
+      if (!document.execCommand("copy")) throw new Error("copy command rejected");
+      new Notice(cut ? "Nodes cut." : "Nodes copied.");
+    } catch { this.pendingClipboardCut = false; new Notice("Clipboard access failed. Use Ctrl+C or Ctrl+X."); }
+  }
+  async pasteFromSystemClipboard() {
+    try {
+      const clipboard: any = navigator.clipboard;
+      if (clipboard.read) {
+        const items = await clipboard.read();
+        for (const item of items) {
+          const xmlType = item.types.find((type: string) => type === "application/x-freeplane-node+xml" || type === "web application/x-freeplane-node+xml");
+          if (xmlType && this.pasteNodeXml(await (await item.getType(xmlType)).text())) return;
+        }
+      }
+      this.pasteOutline(await clipboard.readText());
+    }
+    catch { new Notice("Clipboard access failed. Use Ctrl+V."); }
+  }
+  pasteNodeXml(xml: string): boolean {
+    if (!this.doc || !this.selectedId) return false;
+    const anchor = nodeById(this.doc, this.selectedId);
+    if (!anchor) return false;
+    let sourceNodes: Element[];
+    try { sourceNodes = parseNodeClipboard(xml); }
+    catch (e) { console.error("Freeplane: clipboard XML parse failed", e); return false; }
+    if (!sourceNodes.length) return false;
+    const before = serializeDoc(this.doc);
+    const topIds: string[] = [];
+    for (const source of sourceNodes) {
+      const node = this.doc.importNode(source, true) as Element;
+      [node, ...Array.from(node.querySelectorAll("node"))].forEach((el) => el.setAttribute("ID", this.generateNodeId()));
+      if (anchor.parentElement?.nodeName.toLowerCase() === "map") {
+        if (!node.getAttribute("POSITION")) node.setAttribute("POSITION", "right");
+      } else node.removeAttribute("POSITION");
+      anchor.appendChild(node);
+      topIds.push(node.getAttribute("ID") || "");
+    }
+    anchor.removeAttribute("FOLDED");
+    this.selectedIds = new Set(topIds);
+    this.selectedId = topIds[topIds.length - 1];
+    this.commit(before);
+    return true;
+  }
+  pasteOutline(text: string) {
+    if (!this.doc || !this.selectedId) return;
+    const anchor = nodeById(this.doc, this.selectedId);
+    if (!anchor) return;
+    const rows = text.replace(/\r\n?/g, "\n").split("\n")
+      .map((line) => ({ depth: (line.match(/^\t*/) || [""])[0].length, text: line.replace(/^\t*/, "").trimEnd() }))
+      .filter((row) => row.text.length > 0);
+    if (!rows.length) return;
+    const minDepth = Math.min(...rows.map((row) => row.depth));
+    const before = serializeDoc(this.doc);
+    const stack: Element[] = [];
+    const topIds: string[] = [];
+    for (const row of rows) {
+      let depth = Math.max(0, row.depth - minDepth);
+      depth = Math.min(depth, stack.length);
+      const node = this.createMmNode(row.text);
+      if (!node) continue;
+      const parent = depth === 0 ? anchor : stack[depth - 1];
+      parent.appendChild(node);
+      parent.removeAttribute("FOLDED");
+      if (parent.parentElement?.nodeName.toLowerCase() === "map") node.setAttribute("POSITION", "right");
+      stack[depth] = node;
+      stack.length = depth + 1;
+      if (depth === 0) topIds.push(node.getAttribute("ID") || "");
+    }
+    if (!topIds.length) return;
+    this.selectedIds = new Set(topIds);
+    this.selectedId = topIds[topIds.length - 1];
+    this.commit(before);
   }
   deleteSelectedNodes() {
     if (!this.doc || !this.selectedId) return;
@@ -813,41 +1052,61 @@ export class FreeplaneView extends FileView {
 
   moveSelectedSibling(dir: -1 | 1) {
     if (!this.doc || !this.selectedId) return;
-    const el = nodeById(this.doc, this.selectedId);
-    if (!el || !el.parentElement) return;
-    const parent = el.parentElement;
-    const sibs = this.nodeChildren(parent);
-    const idx = sibs.indexOf(el);
-    if (idx < 0 || sibs.length < 2) return;
+    const nodes = this.selectedTopNodes();
+    if (!nodes.length) return;
     const before = serializeDoc(this.doc);
-    if (dir < 0) { if (idx === 0) parent.insertBefore(el, this.nextNodeSibling(sibs[sibs.length - 1])); else parent.insertBefore(el, sibs[idx - 1]); }
-    else { if (idx === sibs.length - 1) parent.insertBefore(el, sibs[0]); else parent.insertBefore(el, this.nextNodeSibling(sibs[idx + 1])); }
-    this.commit(before);
+    const ordered = dir < 0 ? nodes : [...nodes].reverse();
+    let changed = false;
+    for (const el of ordered) {
+      const parent = el.parentElement;
+      if (!parent) continue;
+      const sibs = this.nodeChildren(parent), idx = sibs.indexOf(el);
+      if (idx < 0 || sibs.length < 2) continue;
+      if (dir < 0) {
+        if (idx === 0) parent.insertBefore(el, this.nextNodeSibling(sibs[sibs.length - 1]));
+        else parent.insertBefore(el, sibs[idx - 1]);
+      } else {
+        if (idx === sibs.length - 1) parent.insertBefore(el, sibs[0]);
+        else parent.insertBefore(el, this.nextNodeSibling(sibs[idx + 1]));
+      }
+      changed = true;
+    }
+    if (changed) this.commit(before);
   }
   promoteSelected() {
     if (!this.doc || !this.selectedId) return;
-    const el = nodeById(this.doc, this.selectedId);
-    if (!el) return;
-    const parent = el.parentElement;
-    if (!parent || parent.nodeName.toLowerCase() !== "node") return;
-    const grand = parent.parentElement;
-    if (!grand || grand.nodeName.toLowerCase() === "map") return;
+    const nodes = this.selectedTopNodes();
+    if (!nodes.length) return;
     const before = serializeDoc(this.doc);
-    grand.insertBefore(el, this.nextNodeSibling(parent));
-    el.removeAttribute("POSITION");
-    this.commit(before);
+    let changed = false;
+    // Insert in reverse document order because every promoted sibling is
+    // placed immediately after its former parent.
+    for (const el of [...nodes].reverse()) {
+      const parent = el.parentElement;
+      if (!parent || parent.nodeName.toLowerCase() !== "node") continue;
+      const grand = parent.parentElement;
+      if (!grand || grand.nodeName.toLowerCase() === "map") continue;
+      grand.insertBefore(el, this.nextNodeSibling(parent));
+      el.removeAttribute("POSITION");
+      changed = true;
+    }
+    if (changed) this.commit(before);
   }
   demoteSelected() {
     if (!this.doc || !this.selectedId) return;
-    const el = nodeById(this.doc, this.selectedId);
-    if (!el) return;
-    const prev = this.prevNodeSibling(el);
-    if (!prev) return;
+    const nodes = this.selectedTopNodes();
+    if (!nodes.length) return;
     const before = serializeDoc(this.doc);
-    prev.appendChild(el);
-    prev.removeAttribute("FOLDED");
-    el.removeAttribute("POSITION");
-    this.commit(before);
+    let changed = false;
+    for (const el of nodes) {
+      const prev = this.prevNodeSibling(el);
+      if (!prev) continue;
+      prev.appendChild(el);
+      prev.removeAttribute("FOLDED");
+      el.removeAttribute("POSITION");
+      changed = true;
+    }
+    if (changed) this.commit(before);
   }
   createSiblingBeforeSelected() {
     if (!this.doc || !this.selectedId) return;

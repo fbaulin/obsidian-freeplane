@@ -7,7 +7,7 @@
  * Also computes node sizes: wrapped multiline TEXT, DETAILS/NOTE preview
  * blocks, and cached Markdown-measured sizes.
  */
-import { childNodeElements, richContentSource } from "./xml";
+import { childNodeElements, richContentPreviewSource } from "./xml";
 import { needsMarkdown } from "./md";
 import { settings } from "../settings";
 
@@ -62,6 +62,9 @@ export function layoutMap(
 
     const id = el.getAttribute("ID") || "";
     const text = el.getAttribute("TEXT") || "";
+    const fontEl = Array.from(el.children).find((c) => c.nodeName.toLowerCase() === "font");
+    const fontBold = fontEl?.getAttribute("BOLD") === "true";
+    const fontItalic = fontEl?.getAttribute("ITALIC") === "true";
     const imageHook = Array.from(el.children).find((c) =>
       c.nodeName.toLowerCase() === "hook" && c.getAttribute("NAME") === "ExternalObject"
     );
@@ -69,8 +72,8 @@ export function layoutMap(
     const imageScale = Math.max(0.05, Number(imageHook?.getAttribute("SIZE")) || 1);
     const imageSize = imageUri ? (imageSizes || {})[id] || { w: 240, h: 160 } : null;
 
-    const details = richContentSource(el, "DETAILS").trim(); // preview sources
-    const note = richContentSource(el, "NOTE").trim();
+    const details = richContentPreviewSource(el, "DETAILS").trim(); // preview sources
+    const note = richContentPreviewSource(el, "NOTE").trim();
     const hasRich = !!details || !!note;
     const richExpanded = hasRich && expanded.has(id);        // preview visible?
 
@@ -131,7 +134,7 @@ export function layoutMap(
     const titleWidth = isMarkdown
       ? (mdSize ? mdSize.w : 220)                            // measured width
       : estimateWidth(longestLine);                          // canvas-measured
-    const richLongest = richBlocks.flatMap((b) => b.lines).reduce(
+    const richLongest = richBlocks.flatMap((b) => b.lines).map(stripInlineMarkdown).reduce(
       (a: string, b: string) => (a.length >= b.length ? a : b), ""
     );
     const richWidth = richExpanded ? estimateWidth(richLongest) : 0;
@@ -150,6 +153,8 @@ export function layoutMap(
       el,
       id,
       text,
+      fontBold,
+      fontItalic,
       depth,
       side,
       width,
@@ -294,6 +299,12 @@ export function layoutMap(
     width: Math.max(800, viewBox[2]),
     height: Math.max(600, viewBox[3])
   };
+}
+
+/** Remove lightweight emphasis markers when estimating visible width. */
+function stripInlineMarkdown(text: string): string {
+  return String(text).replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/_([^_]+)_/g, "$1");
 }
 
 let measureCtx: CanvasRenderingContext2D | null = null;  // lazy canvas measurer
