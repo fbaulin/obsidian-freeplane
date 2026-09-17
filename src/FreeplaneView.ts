@@ -38,6 +38,10 @@ export class FreeplaneView extends FileView {
   sidebarEl!: HTMLElement;
   panelUpdate: (() => void) | null = null;
   searchQuery = "";
+  editingPanel: HTMLElement | null = null;
+  editingPanelEnabled = false;
+  touchMoveMode = false;
+  touchEditId: string | null = null;
   searchBar: HTMLElement | null = null;
   searchInput: HTMLInputElement | null = null;
   searchCount: HTMLElement | null = null;
@@ -88,6 +92,11 @@ export class FreeplaneView extends FileView {
         viewport.removeEventListener("scroll", changed);
       });
     }
+    this.registerDomEvent(window, "resize", () => this.scheduleKeyboardViewportUpdate());
+    this.registerDomEvent(document, "scroll", () => this.scheduleKeyboardViewportUpdate(), true);
+    const keyboardResizeObserver = new ResizeObserver(() => this.scheduleKeyboardViewportUpdate());
+    keyboardResizeObserver.observe(this.contentEl);
+    this.register(() => keyboardResizeObserver.disconnect());
 
     // ALL hotkeys come from hotkeys.json, dispatched in capture phase
     this.registerDomEvent(window, "keydown", (e: KeyboardEvent) => {
@@ -107,7 +116,7 @@ export class FreeplaneView extends FileView {
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onDragMove(e));
     this.registerDomEvent(document, "pointerup", (e: PointerEvent) => this.onDragEnd(e));
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onAreaSelectMove(e));
-    this.registerDomEvent(document, "pointerup", () => this.onAreaSelectEnd());
+    this.registerDomEvent(document, "pointerup", (e: PointerEvent) => { if (e.pointerType !== "touch") this.onAreaSelectEnd(); });
     this.registerDomEvent(this.canvasEl, "wheel", (e: WheelEvent) => {
       e.preventDefault();
       const scale = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.canvasEl.clientHeight : 1;
@@ -130,6 +139,10 @@ export class FreeplaneView extends FileView {
     this.registerDomEvent(this.canvasEl, "touchcancel", (e: TouchEvent) => this.onTouchEnd(e), { passive: false } as any);
 
     this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
+      if (this.suppressNextClick) {
+        this.suppressNextClick = false;
+        e.preventDefault(); e.stopImmediatePropagation(); return;
+      }
       const anchor = (e.target as Element).closest?.('a[href^="#fp-node:"]');
       if (!anchor) return;
       e.preventDefault(); e.stopPropagation();
@@ -267,6 +280,7 @@ export class FreeplaneView extends FileView {
   }
   async onClose() {
     try { await this.flushRecovery(); } catch {}
+    if (this.keyboardEditSession) this.keyboardEditSession.editor.remove();
     if (this.keyboardViewportFrame) window.cancelAnimationFrame(this.keyboardViewportFrame);
     if (this.keyboardViewportTimer) window.clearTimeout(this.keyboardViewportTimer);
     this.keyboardEditSession = null;
@@ -278,8 +292,17 @@ export class FreeplaneView extends FileView {
   beginKeyboardEdit(id: string, editor: HTMLTextAreaElement) {
     this.keyboardRestoreToken++;
     const viewport = window.visualViewport;
+    const editorBox = editor.getBoundingClientRect();
+    const canvasBox = this.canvasEl.getBoundingClientRect();
+    const ancestors: { el: HTMLElement; left: number; top: number }[] = [];
+    for (let el = this.contentEl; el; el = el.parentElement!) {
+      ancestors.push({ el, left: el.scrollLeft, top: el.scrollTop });
+    }
     this.keyboardEditSession = {
       id, editor,
+      ancestors,
+      editorX: editorBox.left - canvasBox.left,
+      editorY: editorBox.top - canvasBox.top,
       scrollLeft: this.canvasEl.scrollLeft,
       scrollTop: this.canvasEl.scrollTop,
       baselineHeight: Math.min(viewport?.height || Number.POSITIVE_INFINITY, window.innerHeight),
@@ -288,6 +311,11 @@ export class FreeplaneView extends FileView {
       centerGeneration: 0
     };
     const session = this.keyboardEditSession;
+    // Keep the focusable editor outside the map's scrolling element. Otherwise
+    // Android can scroll the map to reveal the caret when its keyboard opens.
+    this.contentEl.appendChild(editor);
+    editor.addClass("fp-viewport-editor");
+    this.updateKeyboardEditViewport();
     for (const delay of [150, 350, 650]) {
       window.setTimeout(() => {
         if (this.keyboardEditSession === session) this.scheduleKeyboardViewportUpdate();
@@ -299,7 +327,7 @@ export class FreeplaneView extends FileView {
     const session = this.keyboardEditSession;
     if (!session || session.editor !== editor) return;
     session.finished = true;
-    this.scheduleKeyboardViewportUpdate();
+    this.restorePreKeyboardPosition(session);
   }
 
   scheduleKeyboardViewportUpdate() {
@@ -319,39 +347,47 @@ export class FreeplaneView extends FileView {
   updateKeyboardEditViewport() {
     const session = this.keyboardEditSession;
     if (!session || !this.canvasEl?.isConnected) return;
-    const viewport = window.visualViewport;
-    const currentHeight = Math.min(viewport?.height || Number.POSITIVE_INFINITY, window.innerHeight);
-    const threshold = Math.max(100, session.baselineHeight * 0.15);
-    const keyboardVisible = currentHeight < session.baselineHeight - threshold;
-    if (keyboardVisible) {
-      session.keyboardVisible = true;
-      if (!session.finished) {
-        const generation = ++session.centerGeneration;
-        const center = () => {
-          if (this.keyboardEditSession !== session || session.finished || session.centerGeneration !== generation) return;
-          this.sizeCanvasForKeyboard();
-          this.centerNodeInVisibleArea(session.id);
-        };
-        center();
-        // Android may apply its native focus pan after the first viewport
-        // resize event. Re-center through the full keyboard animation.
-        window.setTimeout(center, 120);
-        window.setTimeout(center, 280);
-        window.setTimeout(center, 500);
-      }
-      return;
+    // Preserve the top-left scene origin, including host containers that native
+    // focus scrolling can move. The viewport may shrink only at the bottom.
+    for (const saved of session.ancestors) {
+      if (saved.el.scrollLeft !== saved.left) saved.el.scrollLeft = saved.left;
+      if (saved.el.scrollTop !== saved.top) saved.el.scrollTop = saved.top;
     }
-    if (session.keyboardVisible || session.finished) this.restorePreKeyboardPosition(session);
+    if (this.canvasEl.scrollLeft !== session.scrollLeft) this.canvasEl.scrollLeft = session.scrollLeft;
+    if (this.canvasEl.scrollTop !== session.scrollTop) this.canvasEl.scrollTop = session.scrollTop;
+    const viewport = window.visualViewport;
+    const canvas = this.canvasEl.getBoundingClientRect();
+    const host = this.contentEl.getBoundingClientRect();
+    const top = Math.max(canvas.top, viewport?.offsetTop || 0) + 4;
+    const bottom = Math.min(canvas.bottom, (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight)) - 4;
+    const left = Math.max(canvas.left, viewport?.offsetLeft || 0) + 4;
+    const right = Math.min(canvas.right, (viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth)) - 4;
+    if (bottom <= top || right <= left) return;
+    const editor = session.editor as HTMLTextAreaElement;
+    const set = (name: string, value: string) => {
+      if (editor.style.getPropertyValue(name) !== value) editor.style.setProperty(name, value);
+    };
+    set("max-height", `${bottom - top}px`);
+    set("max-width", `${right - left}px`);
+    const box = editor.getBoundingClientRect();
+    const x = Math.max(left, Math.min(canvas.left + session.editorX, right - box.width));
+    const y = Math.max(top, Math.min(canvas.top + session.editorY, bottom - box.height));
+    set("left", `${x - host.left}px`);
+    set("top", `${y - host.top}px`);
   }
 
   centerNodeInVisibleArea(id: string) {
-    const node = this.layout?.byId?.[id];
-    const viewBox = this.layout?.viewBox as number[] | undefined;
-    if (!node || !viewBox) return;
-    const centerX = (node.x + node.width / 2 - viewBox[0]) * this.zoom;
-    const centerY = (node.y + node.height / 2 - viewBox[1]) * this.zoom;
-    this.canvasEl.scrollLeft = centerX - this.canvasEl.clientWidth / 2;
-    this.canvasEl.scrollTop = centerY - this.canvasEl.clientHeight / 2;
+    const node = this.svg.querySelector('.fp-node[data-id="' + cssEscape(id) + '"]');
+    if (!node) return;
+    const box = node.getBoundingClientRect(), canvas = this.canvasEl.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const top = Math.max(canvas.top, viewport?.offsetTop || 0);
+    const bottom = Math.min(canvas.bottom, (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight));
+    const left = Math.max(canvas.left, viewport?.offsetLeft || 0);
+    const right = Math.min(canvas.right, (viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth));
+    if (bottom <= top || right <= left) return;
+    this.canvasEl.scrollLeft += (box.left + box.right - left - right) / 2;
+    this.canvasEl.scrollTop += (box.top + box.bottom - top - bottom) / 2;
   }
 
   sizeCanvasForKeyboard() {
@@ -381,6 +417,10 @@ export class FreeplaneView extends FileView {
     const token = ++this.keyboardRestoreToken;
     const restore = () => {
       if (this.keyboardRestoreToken !== token || !this.canvasEl?.isConnected) return;
+      for (const saved of session.ancestors) {
+        saved.el.scrollLeft = saved.left;
+        saved.el.scrollTop = saved.top;
+      }
       this.canvasEl.scrollLeft = session.scrollLeft;
       this.canvasEl.scrollTop = session.scrollTop;
     };
@@ -388,6 +428,8 @@ export class FreeplaneView extends FileView {
       restore();
       window.requestAnimationFrame(restore);
       window.setTimeout(restore, 120);
+      window.setTimeout(restore, 300);
+      window.setTimeout(restore, 600);
     });
   }
 
@@ -543,12 +585,38 @@ export class FreeplaneView extends FileView {
   }
 
   onTouchStart(e: TouchEvent) {
+    this.suppressNextClick = false;
+    if (e.touches.length >= 2) {
+      this.areaSelecting = null; this.updateAreaSelectionOverlay();
+      this.dragging = null; this.dropHint = null; this.touchEditId = null; this.updateDropOverlay();
+      this.canvasEl.removeClass("fp-dragging");
+    } else if (this.touchMoveMode && !this.isEditableTarget(e.target)) {
+      const target = e.target as Element;
+      const node = target.closest(".fp-node");
+      if (node && !target.closest("a, .fp-rich-link, .fp-fold, .fp-rich-toggle, .fp-rich-edit")) {
+        e.preventDefault();
+        this.touchEditId = node.getAttribute("data-id");
+        const t = e.touches[0];
+        if (this.touchEditId) this.startDrag(this.touchEditId, new PointerEvent("pointerdown", { clientX: t.clientX, clientY: t.clientY, button: 0, pointerType: "mouse", shiftKey: true }));
+      } else if (!node) {
+        e.preventDefault();
+        const t = e.touches[0];
+        this.startAreaSelection(new PointerEvent("pointerdown", { clientX: t.clientX, clientY: t.clientY }));
+      }
+    }
     if (e.touches.length >= 2) e.preventDefault();
     this.hidePreview();
     this.touchGesture = { ...this.touchState(e), moved: this.touchGesture?.moved || false, travel: this.touchGesture?.travel || 0 };
   }
 
   onTouchMove(e: TouchEvent) {
+    if (this.touchMoveMode && e.touches.length === 1) {
+      e.preventDefault();
+      const t = e.touches[0];
+      if (this.touchEditId) this.onDragMove(new PointerEvent("pointermove", { clientX: t.clientX, clientY: t.clientY }));
+      else if (this.areaSelecting) this.onAreaSelectMove(new PointerEvent("pointermove", { clientX: t.clientX, clientY: t.clientY }));
+      return;
+    }
     e.preventDefault();
     const prev = this.touchGesture;
     const cur = this.touchState(e);
@@ -568,6 +636,20 @@ export class FreeplaneView extends FileView {
   }
 
   onTouchEnd(e: TouchEvent) {
+    if (this.areaSelecting && e.touches.length === 0) {
+      if (e.type === "touchcancel") { this.areaSelecting = null; this.updateAreaSelectionOverlay(); }
+      else this.onAreaSelectEnd();
+    }
+    if (this.touchMoveMode && this.touchEditId && e.touches.length === 0) {
+      const id = this.touchEditId, dragged = this.dragging?.started;
+      this.touchEditId = null;
+      if (e.type === "touchcancel") { this.dragging = null; this.dropHint = null; this.canvasEl.removeClass("fp-dragging"); this.updateDropOverlay(); }
+      else {
+        this.onDragEnd(new PointerEvent("pointerup"));
+        if (!dragged) this.selectNode(id, true);
+      }
+      this.suppressNextClick = true;
+    }
     const cur = this.touchState(e);
     this.touchGesture = cur ? { ...cur, moved: this.touchGesture?.moved || false, travel: this.touchGesture?.travel || 0 } : null;
     if (!cur) this.canvasEl.removeClass("fp-panning");
@@ -827,6 +909,14 @@ export class FreeplaneView extends FileView {
     this.panelUpdate = null;
     if (!this.doc) return;
     if (!this.selectedId) {
+      const label = this.sidebarEl.createEl("label", { text: "Editing panel " });
+      const toggle = label.createEl("input", { type: "checkbox" });
+      toggle.checked = this.editingPanelEnabled;
+      toggle.onchange = () => {
+        this.editingPanelEnabled = toggle.checked;
+        if (!toggle.checked) this.touchMoveMode = false;
+        this.renderEditingPanel();
+      };
       const zr = this.sidebarEl.createDiv({ cls: "fp-zoom-row" });
       zr.createEl("button", { text: "+" }).addEventListener("click", () => this.zoomStep(0.1));
       zr.createEl("button", { text: "−" }).addEventListener("click", () => this.zoomStep(-0.1));
@@ -1181,6 +1271,63 @@ export class FreeplaneView extends FileView {
   toggleSidebar(forceHidden?: boolean) {
     this.sidebarHidden = typeof forceHidden === "boolean" ? forceHidden : !this.sidebarHidden;
     if (this.sidebarEl) this.sidebarEl.style.display = this.sidebarHidden ? "none" : "";
+    this.renderEditingPanel();
+  }
+  renderEditingPanel() {
+    this.editingPanel?.remove();
+    this.editingPanel = null;
+    if (!this.editingPanelEnabled) return;
+    const panel = this.contentEl.createDiv({ cls: "fp-editing-panel" });
+    this.editingPanel = panel;
+    const configuredSize = Number(settings.editingPanelButtonSize);
+    const size = Number.isFinite(configuredSize) ? Math.max(16, Math.min(96, configuredSize)) : 33;
+    panel.style.setProperty("--fp-panel-button-size", `${size}px`);
+    panel.style.setProperty("--fp-panel-font-size", `${size * 7.5 / 22}px`);
+    panel.setAttribute("aria-label", "Editing panel");
+    panel.style.right = `min(${this.sidebarHidden ? 12 : this.sidebarEl.offsetWidth + 12}px, max(4px, calc(100% - ${size * 4 + 16}px)))`;
+    panel.addEventListener("pointerdown", e => e.stopPropagation());
+    const action = (name: string) => {
+      if (!this.selectedId && this.doc && name.startsWith("nav-")) {
+        const id = this.doc.querySelector("node")?.getAttribute("ID");
+        if (id) this.selectNode(id);
+        return;
+      }
+      this.runAction(`freeplane:${name}`);
+    };
+    const button = (label: string, title: string, fn: () => void) => {
+      const b = panel.createEl("button", { text: label, attr: { type: "button", title, "aria-label": title } });
+      b.onclick = fn;
+      return b;
+    };
+    const cmd = (label: string, title: string, name: string) => button(label, title, () => action(name));
+    const move = this.touchMoveMode;
+    cmd("Del", "Delete selected nodes", "delete");
+    cmd(move ? "↑*" : "+↑", move ? "Extend selection up" : "New sibling above", move ? "select-up" : "new-sibling-above");
+    cmd("↑", move ? "Move nodes up" : "Select previous sibling", move ? "move-up" : "nav-up");
+    if (move) button("Copy", "Copy selected nodes", () => this.copyToSystemClipboard(false));
+    else cmd("→+", "New child", "new-child");
+    cmd("±", "Fold or unfold", "fold");
+    cmd("←", move ? "Promote selected nodes" : "Select parent", move ? "promote" : "nav-left");
+    const mode = button(move ? "Move" : "Create", "Toggle one-finger movement mode", () => {
+      this.touchMoveMode = !this.touchMoveMode;
+      this.renderEditingPanel();
+    });
+    mode.setAttribute("aria-pressed", String(move));
+    cmd("→", move ? "Demote selected nodes" : "Select child", move ? "demote" : "nav-right");
+    cmd("⊙", "Center current node", "center-node");
+    cmd(move ? "↓*" : "+↓", move ? "Extend selection down" : "New sibling below", move ? "select-down" : "new-sibling-below");
+    cmd("↓", move ? "Move nodes down" : "Select next sibling", move ? "move-down" : "nav-down");
+    if (move) button("Cut", "Cut selected nodes", () => this.copyToSystemClipboard(true));
+    else {
+      let timer = 0, held = false;
+      const edit = button("✎", "Edit text; hold to edit details", () => { if (!held) action("rename"); });
+      edit.onpointerdown = e => {
+        held = false; edit.setPointerCapture(e.pointerId);
+        timer = window.setTimeout(() => { held = true; action("edit-details"); }, 500);
+      };
+      edit.onpointerup = edit.onpointercancel = () => window.clearTimeout(timer);
+      edit.oncontextmenu = e => e.preventDefault();
+    }
   }
   syncRichExpanded() {
     this.richExpanded = new Set<string>();
@@ -1416,6 +1563,7 @@ export class FreeplaneView extends FileView {
       startX: e.clientX, startY: e.clientY, started: false };
   }
   onDragMove(e: PointerEvent) {
+    if (e.pointerType === "touch") return;
     if (!this.dragging || !this.layout) return;
     if (!this.dragging.started) {
       const dx = e.clientX - this.dragging.startX, dy = e.clientY - this.dragging.startY;
@@ -1432,6 +1580,7 @@ export class FreeplaneView extends FileView {
     this.updateDropOverlay();
   }
   onDragEnd(_e: PointerEvent) {
+    if (_e.pointerType === "touch") return;
     if (!this.dragging) return;
     const drag = this.dragging, hint = this.dropHint;
     this.dragging = null; this.dropHint = null;
@@ -1523,6 +1672,7 @@ export class FreeplaneView extends FileView {
     };
     resizeEdit();
     input.addEventListener("input", resizeEdit);
+    input.addEventListener("input", () => this.scheduleKeyboardViewportUpdate());
     let done = false;
     const commit = () => { if (done) return; done = true; const v = input.value; this.finishKeyboardEdit(input); input.remove(); this.updateNodeText(id, v); };
     const cancel = () => { if (done) return; done = true; this.finishKeyboardEdit(input); input.remove(); };
@@ -1547,6 +1697,7 @@ export class FreeplaneView extends FileView {
     const canvasBox = this.canvasEl.getBoundingClientRect();
     const ta = this.canvasEl.createEl("textarea", { cls: "fp-inline-edit fp-inline-rich-edit" }) as HTMLTextAreaElement;
     this.attachSuggest(ta);
+    ta.addEventListener("input", () => this.scheduleKeyboardViewportUpdate());
     ta.value = richContentSource(el, type);
     ta.style.left = `${box.left - canvasBox.left + this.canvasEl.scrollLeft}px`;
     ta.style.top = `${box.top - canvasBox.top + this.canvasEl.scrollTop}px`;

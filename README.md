@@ -99,5 +99,21 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 - HTML named entities (`&nbsp;`…) are converted to numeric form on load.
 
 ## Known limitations
+- Touch editing panel: deselect nodes by tapping empty canvas, open the right
+  sidebar, and enable **Editing panel**. Create mode pans with one finger;
+  Move mode toggles node selection on tap and drags selected nodes with one finger.
+  Two-finger pan/zoom works in both modes. Hold the pencil to edit details.
+  Drag from empty canvas in Move mode to select nodes with a rectangle;
+  drag from a node to move the selection. The ⊙ button centers the current node.
+  Buttons default to 33 × 33 pixels with no panel background. Set
+  `"editingPanelButtonSize": 33` in the plugin's settings.json and reload to change
+  their size in pixels (16–96). The setting is added automatically on load.
+  Inline editing keeps the map's top-left scroll
+  position fixed while the keyboard opens. The editor lives in a separate overlay
+  and is kept above the keyboard without centering or resizing the map. Enter
+  restores the saved scroll position. This works whether the Editing panel is enabled or disabled.
+- Global search results open the map at its initial node. Use Ctrl+F in the map
+  to find the desired content. Direct search-position interception was removed.
+- Node backgrounds and text follow Obsidian's light/dark theme.
 - Tab-close cannot be reliably intercepted by plugins; use the
   "Close current Freeplane map" command for the Save/Discard/Cancel prompt.

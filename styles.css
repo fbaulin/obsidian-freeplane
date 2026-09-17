@@ -1,4 +1,5 @@
 .fp-view {
+  position: relative;
   display: flex;
   flex: 1 1 0;
   height: 0;
@@ -120,7 +121,7 @@
 }
 
 .fp-node rect {
-  fill: #ffffff;
+  fill: var(--background-primary);
   stroke: var(--background-modifier-border);
   stroke-width: 1.2;
 }
@@ -128,6 +129,31 @@
 .fp-node.selected rect {
   stroke: var(--interactive-accent);
   stroke-width: 2;
+}
+
+.fp-editing-panel {
+  position: absolute;
+  bottom: 14px;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(4, var(--fp-panel-button-size, 33px));
+  gap: 3px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  touch-action: none;
+}
+.fp-editing-panel button {
+  width: var(--fp-panel-button-size, 33px);
+  height: var(--fp-panel-button-size, 33px);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  font-size: var(--fp-panel-font-size, 11.25px);
+}
+.fp-editing-panel button[aria-pressed="true"] {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
 }
 
 .fp-node text {
@@ -166,6 +192,15 @@
   background: var(--background-primary);
   color: var(--text-normal);
   border-radius: 4px;
+}
+
+.fp-viewport-editor {
+  box-sizing: border-box;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
 }
 
 .fp-drop {

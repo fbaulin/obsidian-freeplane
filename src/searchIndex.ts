@@ -14,8 +14,8 @@ export function installSearchIndex(plugin: Plugin) {
     await app.workspace.revealLeaf(leaf);
     if (leaf.view instanceof FreeplaneView) leaf.view.revealNode(id);
   };
-  // Search opens a Markdown result with ephemeral line/selection state. Read
-  // that state after openFile finishes, then replace the index view with the map.
+  // Open the map from an index result. Use the plugin search to locate text;
+  // do not intercept WorkspaceLeaf methods or depend on search selection state.
   plugin.registerEvent(app.workspace.on("file-open", file => {
     if (!file || !file.path.startsWith(folder + "/")) return;
     const leaf = app.workspace.activeLeaf;
@@ -23,20 +23,12 @@ export function installSearchIndex(plugin: Plugin) {
     window.setTimeout(() => { void (async () => {
       const view = leaf.view;
       if (!(view instanceof MarkdownView) || view.file !== file) return;
-      const state = leaf.getEphemeralState();
-      const line = state?.line ?? state?.start?.line ?? view.editor?.getCursor()?.line ?? 0;
       const text = await app.vault.read(file);
       if (!text.startsWith(marker) || leaf.view !== view) return;
-      const lines = text.split("\n");
-      let id = "";
-      for (let i = Math.min(line, lines.length - 1); i >= 0; i--) {
-        const match = /^## (.+)$/.exec(lines[i]);
-        if (match) { id = match[1]; break; }
-      }
-      if (!id) id = /^## (.+)$/m.exec(text)?.[1] || "";
       const url = /obsidian:\/\/freeplane-node\?[^)\s]+/.exec(text)?.[0];
-      if (!url || !id) return;
+      if (!url) return;
       const params = new URL(url).searchParams;
+      const id = params.get("node") || "";
       const map = app.vault.getAbstractFileByPath(params.get("file") || "");
       if (map instanceof TFile) await openNode(leaf, map, id);
     })().catch(err => { console.error(err); new Notice("Could not open matching map node."); }); }, 0);
