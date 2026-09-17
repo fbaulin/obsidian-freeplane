@@ -1,14 +1,15 @@
-import { Plugin, TFolder, TFile, Notice } from "obsidian";
+import { Plugin, TFolder, TFile, Notice, PluginSettingTab, Setting } from "obsidian";
 import { renamedLinks } from "./renameLinks";
 import { installSearchIndex } from "./searchIndex";
 import { serializeDoc, parseMm } from "./mm/xml";
 import { FreeplaneView, VIEW_TYPE_FREEPLANE } from "./FreeplaneView";
 import { readCache, writeCache } from "./recovery";
-import { applySettings, DEFAULT_SETTINGS } from "./settings";
+import { applySettings, DEFAULT_SETTINGS, settings, SETTING_FIELDS, FpSettings } from "./settings";
 import { setHotkeys, HOTKEYS_FILE_DEFAULT, DEFAULT_HOTKEYS } from "./hotkeys";
 
 export default class FreeplanePlugin extends Plugin {
   renameQueue: Promise<void> = Promise.resolve();
+  settingsQueue: Promise<void> = Promise.resolve();
   async onload() {
     this.registerView(VIEW_TYPE_FREEPLANE, (leaf) => new FreeplaneView(leaf, this));
     this.registerExtensions(["mm"], VIEW_TYPE_FREEPLANE);
@@ -31,6 +32,7 @@ export default class FreeplanePlugin extends Plugin {
 
     // settings.json + hotkeys.json from the plugin folder (created if missing)
     await this.loadConfigFiles();
+    this.addSettingTab(new FreeplaneSettingsTab(this));
     await this.cleanupRecovery();
     installSearchIndex(this);
 
@@ -85,6 +87,24 @@ export default class FreeplanePlugin extends Plugin {
     } catch (e) { console.error("Freeplane: hotkeys.json", e); }
   }
 
+  saveSetting(key: keyof FpSettings, value: number) {
+    this.settingsQueue = this.settingsQueue.catch(() => {}).then(async () => {
+      const path = `${this.manifest.dir}/settings.json`;
+      const adapter = this.app.vault.adapter;
+      const existing = await adapter.exists(path) ? JSON.parse(await adapter.read(path)) : {};
+      const next = { ...existing, ...settings, [key]: value };
+      await adapter.write(path, JSON.stringify(next, null, 2) + "\n");
+      applySettings(next);
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FREEPLANE)) {
+        const view = leaf.view as FreeplaneView;
+        view.mdSizes = {};
+        view.renderAll();
+        view.renderEditingPanel();
+      }
+    });
+    return this.settingsQueue;
+  }
+
   async createMindMap(folder: any) {
     const base = folder && folder.path ? folder.path : "";
     const d = new Date();
@@ -127,4 +147,28 @@ export default class FreeplanePlugin extends Plugin {
   }
 
   onunload() { this.app.workspace.detachLeavesOfType(VIEW_TYPE_FREEPLANE); }
+}
+
+class FreeplaneSettingsTab extends PluginSettingTab {
+  constructor(private owner: FreeplanePlugin) { super(owner.app, owner); }
+  display() {
+    this.containerEl.empty();
+    this.containerEl.createEl("p", { text: "Changes apply immediately and are saved to settings.json." });
+    for (const field of SETTING_FIELDS) {
+      new Setting(this.containerEl).setName(field.name).setDesc(field.desc).addText(text => {
+        const input = text.inputEl;
+        input.type = "number"; input.min = String(field.min); input.max = String(field.max); input.step = String(field.step);
+        text.setValue(String(settings[field.key]));
+        input.addEventListener("change", async () => {
+          const value = Number(input.value);
+          if (!input.value.trim() || !Number.isFinite(value) || value < field.min || value > field.max) {
+            new Notice(`Enter a number between ${field.min} and ${field.max}.`);
+            text.setValue(String(settings[field.key])); return;
+          }
+          try { await this.owner.saveSetting(field.key, value); }
+          catch (e) { console.error(e); new Notice("Could not save Freeplane settings."); text.setValue(String(settings[field.key])); }
+        });
+      });
+    }
+  }
 }

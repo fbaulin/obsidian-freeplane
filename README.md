@@ -99,6 +99,11 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 - HTML named entities (`&nbsp;`…) are converted to numeric form on load.
 
 ## Known limitations
+- Settings → Freeplane Mind Map exposes all settings.json options. Changes save
+  to that file and apply to open maps immediately. `detailsFontSize` defaults to
+  12 pixels at 100% zoom and controls details viewing and editing (node text: 13 px).
+- The Save icon turns red while the map has unsaved changes. The pane's three-dot
+  menu includes **Search mind map**.
 - Touch editing panel: deselect nodes by tapping empty canvas, open the right
   sidebar, and enable **Editing panel**. Create mode pans with one finger;
   Move mode toggles node selection on tap and drags selected nodes with one finger.

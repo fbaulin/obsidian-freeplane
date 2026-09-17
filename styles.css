@@ -12,6 +12,14 @@
   overflow: hidden;
 }
 
+.view-action.fp-save-dirty {
+  color: var(--color-red, #e53935) !important;
+}
+.fp-node text.fp-rich-line[data-type="DETAILS"],
+.fp-md[data-type="DETAILS"] {
+  font-size: var(--fp-details-font-size, 12px);
+}
+
 .workspace-leaf-content[data-type="freeplane-mm-view"] {
   min-height: 0;
   overflow: hidden;

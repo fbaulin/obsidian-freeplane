@@ -96,6 +96,8 @@ export function layoutMap(
     }
 
     for (const block of richBlocks) {
+      block.fontSize = block.type === "DETAILS" ? settings.detailsFontSize : RICH_FONT;
+      block.lineH = Math.ceil(block.fontSize * 1.35);
       const source = block.type === "DETAILS" ? details : note;
       if (needsMarkdown(source)) {
         block.markdown = source;
@@ -104,11 +106,11 @@ export function layoutMap(
     }
     // +1 line per block reserved for its separator
     const richLineCount = richBlocks.reduce(
-      (sum, block) => sum + 1 + (block.markdown ? Math.ceil(block.size.h / RICH_LINE_H) : block.lines.length),
+      (sum, block) => sum + block.lineH + (block.markdown ? Math.ceil(block.size.h / block.lineH) * block.lineH : block.lines.length * block.lineH),
       0
     );
     const richHeight = richExpanded && richLineCount > 0
-      ? RICH_PAD_TOP + richLineCount * RICH_LINE_H + RICH_PAD_BOTTOM
+      ? RICH_PAD_TOP + richLineCount + RICH_PAD_BOTTOM
       : 0;
 
     // Preserve lightweight markup on each wrapped line; the renderer turns it
@@ -133,7 +135,7 @@ export function layoutMap(
     const richLongest = richBlocks.flatMap((b) => b.lines).map(stripInlineMarkdown).reduce(
       (a: string, b: string) => (a.length >= b.length ? a : b), ""
     );
-    const richWidth = richExpanded ? Math.max(estimateWidth(richLongest), ...richBlocks.map(b => b.size?.w || 0)) : 0;
+    const richWidth = richExpanded ? Math.max(0, ...richBlocks.map(b => b.size?.w || Math.max(...b.lines.map((line: string) => estimateWidth(stripInlineMarkdown(line)) * b.fontSize / 13)))) : 0;
     const imageWidth = imageSize ? imageSize.w * imageScale + 20 : 0;
     const width = Math.max(titleWidth, richWidth, imageWidth, 60);
 

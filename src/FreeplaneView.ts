@@ -17,7 +17,14 @@ export class FreeplaneView extends FileView {
   plugin: any;
   doc: Document | null = null;
   originalText = "";
-  dirty = false;
+  private _dirty = false;
+  saveButton: HTMLElement | null = null;
+  get dirty() { return this._dirty; }
+  set dirty(value: boolean) {
+    this._dirty = value;
+    this.saveButton?.classList.toggle("fp-save-dirty", value);
+    this.saveButton?.setAttribute("aria-label", value ? "Save map (unsaved changes)" : "Save map");
+  }
   loadedPath: string | null = null;
   pendingFile: TFile | null = null;
   history = new SnapshotHistory();
@@ -222,7 +229,8 @@ export class FreeplaneView extends FileView {
     }));
 
     try {
-      this.addAction("save", "Save map", () => this.save());
+      this.saveButton = this.addAction("save", "Save map", () => this.save());
+      this.dirty = this.dirty;
       this.addAction("undo-2", "Undo", () => this.undo());
       this.addAction("redo-2", "Redo", () => this.redo());
       this.addAction("panel-right", "Toggle side panel", () => this.toggleSidebar());
@@ -233,6 +241,11 @@ export class FreeplaneView extends FileView {
   }
 
   /** Execute a hotkey action id defined in hotkeys.json. */
+  onPaneMenu(menu: Menu, source: string) {
+    super.onPaneMenu(menu, source);
+    menu.addItem(item => item.setTitle("Search mind map").setIcon("search").onClick(() => this.openSearchBar()));
+  }
+
   runAction(id: string) {
     switch (id) {
       case "freeplane:search": this.openSearchBar(); break;
@@ -867,6 +880,7 @@ export class FreeplaneView extends FileView {
 
   renderAll() {
     if (!this.doc || !this.svg) return;
+    this.contentEl.style.setProperty("--fp-details-font-size", `${settings.detailsFontSize}px`);
     if (!this.selectedId) this.selectedIds.clear();
     else if (!this.selectedIds.has(this.selectedId)) this.selectedIds = new Set([this.selectedId]);
     let anchor: { x: number; y: number } | null = null;
@@ -940,6 +954,8 @@ export class FreeplaneView extends FileView {
     textInput.value = el.getAttribute("TEXT") || "";
     this.sidebarEl.createEl("label", { text: "DETAILS richcontent" });
     const details = this.sidebarEl.createEl("textarea");
+    details.style.fontSize = `${settings.detailsFontSize}px`;
+    details.style.fontFamily = "var(--font-text)";
     this.attachSuggest(details);
     details.value = richContentSource(el, "DETAILS");
     this.sidebarEl.createEl("label", { text: "NOTE richcontent" });
@@ -1703,6 +1719,8 @@ export class FreeplaneView extends FileView {
     ta.style.top = `${box.top - canvasBox.top + this.canvasEl.scrollTop}px`;
     ta.style.width = `${Math.max(n.width, 320)}px`;
     ta.style.height = `120px`;
+    ta.style.fontSize = `${(type === "DETAILS" ? settings.detailsFontSize : 12) * this.zoom}px`;
+    ta.style.lineHeight = "1.35";
     let done = false;
     const commit = () => { if (done) return; done = true; const v = ta.value; this.finishKeyboardEdit(ta); ta.remove(); this.updateRichContent(id, type, v); };
     const cancel = () => { if (done) return; done = true; this.finishKeyboardEdit(ta); ta.remove(); };

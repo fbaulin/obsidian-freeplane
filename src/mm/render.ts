@@ -213,11 +213,12 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
 
   let firstSep = true;
   for (const block of n.richBlocks) {
+    const lineH = block.lineH;
     const sepY = y - (firstSep ? 14 : 11);         // header sep sits 3px higher
     firstSep = false;
-    const lines = block.markdown ? Math.ceil(block.size.h / n.richLineH) : block.lines.length;
+    const lines = block.markdown ? Math.ceil(block.size.h / lineH) : block.lines.length;
     const bottom = block === n.richBlocks[n.richBlocks.length - 1]
-      ? n.height : y + lines * n.richLineH + 4 - 11;
+      ? n.height : y + lines * lineH + 4 - 11;
     const hit = svgEl("rect", {
       class: "fp-rich-line fp-rich-hit",
       x: 0, y: sepY, width: n.width, height: Math.max(0, bottom - sepY),
@@ -245,14 +246,14 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
       div.setAttribute("data-source", block.markdown);
       div.addEventListener("click", (e) => { if ((e.target as Element).closest("a")) return; e.stopPropagation(); handlers.richClick(n.id, block.type); });
       fo.appendChild(div); g.appendChild(fo);
-      y += Math.ceil(block.size.h / n.richLineH) * n.richLineH + 4;
+      y += Math.ceil(block.size.h / lineH) * lineH + 4;
       continue;
     }
     for (const line of block.lines) {
       const t = svgEl("text", {
         class: "fp-rich-line",
         x: 10,
-        y,
+        y: y + Math.max(0, block.fontSize - 12),
         "text-anchor": "start",
         "data-id": n.id,
         "data-type": block.type
@@ -268,7 +269,7 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
         handlers.richClick(n.id, block.type);
       });
       g.appendChild(t);
-      y += n.richLineH;
+      y += lineH;
     }
     y += 4;                                        // gap between blocks
   }
