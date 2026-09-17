@@ -1,15 +1,14 @@
 /**
  * mm/md.ts
  * Detection/conversion helpers for the Markdown rendering pass.
- * Nodes whose TEXT contains Freeplane's "\latex" marker, Markdown emphasis,
- * or Obsidian wikilinks ([[...]] / ![[...]]) are rendered through Obsidian's
- * MarkdownRenderer (MathJax, links, Excalidraw embeds) instead of plain
- * SVG text.
+ * Nodes containing Freeplane's "\latex" marker or an Obsidian embed are
+ * rendered through MarkdownRenderer. Lightweight emphasis and ordinary
+ * wikilinks are rendered directly as wrapped SVG tspans.
  */
 
 /** True when the node text needs the Markdown/MathJax rendering pass. */
 export function needsMarkdown(text: string): boolean {
-  return /\\latex|\[\[|\*\*|__|(^|[\s(])[*_][^*_\n]+[*_]/m.test(text || "");
+  return /\\latex|!\[\[|\$[^$]+\$/.test(text || "");
 }
 
 /** Hide Freeplane's rendering marker; existing $/$$ delimiters set math mode. */

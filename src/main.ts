@@ -1,13 +1,32 @@
-import { Plugin, TFolder } from "obsidian";
+import { Plugin, TFolder, TFile, Notice } from "obsidian";
+import { renamedLinks } from "./renameLinks";
+import { serializeDoc, parseMm } from "./mm/xml";
 import { FreeplaneView, VIEW_TYPE_FREEPLANE } from "./FreeplaneView";
 import { readCache, writeCache } from "./recovery";
 import { applySettings, DEFAULT_SETTINGS } from "./settings";
-import { setHotkeys, HOTKEYS_FILE_DEFAULT } from "./hotkeys";
+import { setHotkeys, HOTKEYS_FILE_DEFAULT, DEFAULT_HOTKEYS } from "./hotkeys";
 
 export default class FreeplanePlugin extends Plugin {
+  renameQueue: Promise<void> = Promise.resolve();
   async onload() {
     this.registerView(VIEW_TYPE_FREEPLANE, (leaf) => new FreeplaneView(leaf, this));
     this.registerExtensions(["mm"], VIEW_TYPE_FREEPLANE);
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (!(file instanceof TFile)) return;
+      this.renameQueue = this.renameQueue.then(async () => {
+        for (const map of this.app.vault.getFiles().filter(f => f.extension === "mm")) {
+          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FREEPLANE)) {
+            const view = leaf.view as FreeplaneView;
+            if (view.file?.path !== map.path || !view.doc) continue;
+            const before = serializeDoc(view.doc);
+            const after = renamedLinks(this.app, before, map.path, oldPath, file);
+            if (after !== before) { view.doc = parseMm(after); view.commit(before); }
+          }
+          await this.app.vault.process(map, xml => renamedLinks(this.app, xml, map.path, oldPath, file));
+        }
+      }).catch(err => { console.error(err); new Notice("Could not update Freeplane links after rename."); });
+    }));
+    this.registerHoverLinkSource(VIEW_TYPE_FREEPLANE, { display: "Freeplane Mind Map", defaultMod: true });
 
     // settings.json + hotkeys.json from the plugin folder (created if missing)
     await this.loadConfigFiles();
@@ -56,7 +75,10 @@ export default class FreeplanePlugin extends Plugin {
       const hp = dir + "/hotkeys.json";
       if (await adapter.exists(hp)) {
         const json = (await adapter.read(hp)).split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-        setHotkeys(JSON.parse(json));
+        const loaded = JSON.parse(json);
+        setHotkeys(loaded);
+        if (Object.keys(DEFAULT_HOTKEYS).some(key => !(key in loaded)))
+          await adapter.write(hp, JSON.stringify({ ...DEFAULT_HOTKEYS, ...loaded }, null, 2) + "\n");
       } else await adapter.write(hp, HOTKEYS_FILE_DEFAULT);
     } catch (e) { console.error("Freeplane: hotkeys.json", e); }
   }

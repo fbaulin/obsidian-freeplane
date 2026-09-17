@@ -1,18 +1,56 @@
 .fp-view {
   display: flex;
-  height: 100%;
+  flex: 1 1 0;
+  height: 0;
+  max-height: none;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  padding: 0 !important;
+  box-sizing: border-box;
   overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="freeplane-mm-view"] {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-leaf-content[data-type="freeplane-mm-view"] > .view-content.fp-view {
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 !important;
 }
 
 .fp-canvas {
   flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
   position: relative;
   overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  touch-action: none;
   background: var(--background-primary);
 }
 
 .fp-svg {
   display: block;
+}
+
+.fp-node .fp-fold, .fp-node .fp-rich-toggle, .fp-node .fp-rich-edit {
+  stroke: transparent;
+  fill: var(--background-modifier-border);
+}
+
+.fp-node rect.fp-rich-hit, .fp-node.selected rect.fp-rich-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+  cursor: text;
 }
 
 .fp-sidebar {
@@ -116,6 +154,15 @@
   pointer-events: none;
 }
 
+.fp-area-select {
+  fill: var(--interactive-accent);
+  fill-opacity: 0.12;
+  stroke: var(--interactive-accent);
+  stroke-width: 1.5;
+  stroke-opacity: 0.9;
+  pointer-events: none;
+}
+
 .fp-drop-child {
   fill: var(--interactive-accent);
   fill-opacity: 0.12;
@@ -216,6 +263,20 @@
   pointer-events: auto;
 }
 
+.fp-md.fp-md-wrap {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  white-space: normal !important;
+}
+
+.fp-md.fp-md-wrap :is(.markdown-preview-view, .markdown-preview-section, p, strong, em, a) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  white-space: normal !important;
+}
+
 .fp-md p {
   margin: 0;
 }
@@ -228,6 +289,15 @@
 .fp-md .excalidraw-svg svg,
 .fp-md svg {
   max-width: 100%;
+}
+
+.fp-md mjx-container[display="true"] {
+  margin: 0.35em 0 !important;
+  font-size: 1.15em;
+}
+
+.fp-md mjx-container svg {
+  max-width: none;
 }
 
 .fp-suggest {
@@ -257,6 +327,10 @@
 .fp-suggest-path {
   color: var(--text-faint);
   font-size: 11px;
+}
+
+.fp-node text.fp-rich-line {
+  pointer-events: auto;
 }
 
 .fp-rich-link {

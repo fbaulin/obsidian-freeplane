@@ -1,8 +1,16 @@
 export interface HotkeyBinding { modifiers: string[]; key: string; }
 export const DEFAULT_HOTKEYS: Record<string, HotkeyBinding[]> = {
+  "freeplane:update-panel": [{ modifiers: ["Mod"], key: "Enter" }],
+  "freeplane:pan-up": [{ modifiers: ["Alt"], key: "ArrowUp" }],
+  "freeplane:pan-down": [{ modifiers: ["Alt"], key: "ArrowDown" }],
+  "freeplane:pan-left": [{ modifiers: ["Alt"], key: "ArrowLeft" }],
+  "freeplane:pan-right": [{ modifiers: ["Alt"], key: "ArrowRight" }],
+  "freeplane:zoom-in": [{ modifiers: [], key: "+" }, { modifiers: ["Shift"], key: "+" }, { modifiers: [], key: "=" }],
+  "freeplane:zoom-out": [{ modifiers: [], key: "-" }],
   "freeplane:save": [{ modifiers: ["Mod"], key: "s" }],
   "freeplane:undo": [{ modifiers: ["Mod"], key: "z" }],
   "freeplane:redo": [{ modifiers: ["Mod", "Shift"], key: "z" }],
+  "freeplane:center-node": [{ modifiers: [], key: "z" }],
   "freeplane:rename": [{ modifiers: ["Mod"], key: "e" }],
   "freeplane:edit-details": [{ modifiers: ["Mod"], key: "d" }],
   "freeplane:edit-note": [{ modifiers: ["Mod", "Shift"], key: "d" }],

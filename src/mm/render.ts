@@ -72,6 +72,13 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     });
     const div = document.createElement("div");    // filled by the view's pass
     div.className = "fp-md";
+    if (n.wrapMarkdown) {
+      div.classList.add("fp-md-wrap");
+      div.style.width = `${n.width}px`;
+      div.style.maxWidth = `${n.width}px`;
+      div.style.whiteSpace = "normal";
+      div.style.overflowWrap = "anywhere";
+    }
     if (n.fontBold) div.style.fontWeight = "700";
     if (n.fontItalic) div.style.fontStyle = "italic";
     div.setAttribute("data-id", n.id);
@@ -84,7 +91,7 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     lines.forEach((ln: string, i: number) => {
       const t = svgEl("text", { x: 10, y: startY + i * 16, "text-anchor": "start",
         ...(n.fontBold ? { "font-weight": "700" } : {}), ...(n.fontItalic ? { "font-style": "italic" } : {}) });
-      t.textContent = ln ? displayText(ln) : " ";
+      appendInlineRuns(t, ln || " ");
       g.appendChild(t);
     });
   }
@@ -162,8 +169,7 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
   g.addEventListener("dblclick", (e: MouseEvent) => {
     e.stopPropagation();
     const target = e.target as Element;
-    if (target.closest && target.closest(".fp-md a")) return;
-    if (target?.classList?.contains("fp-rich-line")) return;
+    if (target.closest?.("a, .fp-rich-link, .fp-rich-line, .fp-rich-edit, .fp-rich-toggle, .fp-fold")) return;
     if (target?.classList?.contains("fp-rich-sep")) return;
     handlers.editText(n.id);
   });
@@ -171,6 +177,7 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
   // pointerdown = start drag (ignored on circles, links, preview lines)
   g.addEventListener("pointerdown", (e: PointerEvent) => {
     const target = e.target as Element;
+    if (target.closest?.(".fp-rich-line")) return;
     if (target.closest && (target.closest(".fp-md a") || target.closest(".fp-rich-link"))) return;
     if (target.classList && (
       target.classList.contains("fp-fold") ||
@@ -188,7 +195,7 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     e.preventDefault();
     e.stopPropagation();
     const target = e.target as Element;
-    const link = target.closest?.("a.internal-link, a.external-link, .fp-rich-link");
+    const link = target.closest?.("a.internal-link, a.external-link, .fp-rich-link, .internal-embed");
     if (link) { handlers.linkContextMenu(link, e); return; }
     handlers.contextMenu(n.id, e);
   });
@@ -208,6 +215,19 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
   for (const block of n.richBlocks) {
     const sepY = y - (firstSep ? 14 : 11);         // header sep sits 3px higher
     firstSep = false;
+    const lines = block.markdown ? Math.ceil(block.size.h / n.richLineH) : block.lines.length;
+    const bottom = block === n.richBlocks[n.richBlocks.length - 1]
+      ? n.height : y + lines * n.richLineH + 4 - 11;
+    const hit = svgEl("rect", {
+      class: "fp-rich-line fp-rich-hit",
+      x: 0, y: sepY, width: n.width, height: Math.max(0, bottom - sepY),
+      "data-id": n.id, "data-type": block.type
+    });
+    hit.addEventListener("click", (e: MouseEvent) => {
+      e.stopPropagation();
+      handlers.richClick(n.id, block.type);
+    });
+    g.appendChild(hit);
     g.appendChild(svgEl("line", {
       class: "fp-rich-sep",
       x1: 8, x2: n.width - 8,
@@ -216,6 +236,18 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
       "data-type": block.type
     }));
 
+    if (block.markdown) {
+      const fo = svgEl("foreignObject", { x: 0, y: y - 10, width: n.width, height: block.size.h, class: "fp-rich-line", "data-id": n.id, "data-type": block.type });
+      const div = document.createElement("div");
+      div.className = "fp-md";
+      div.setAttribute("data-id", n.id);
+      div.setAttribute("data-type", block.type);
+      div.setAttribute("data-source", block.markdown);
+      div.addEventListener("click", (e) => { if ((e.target as Element).closest("a")) return; e.stopPropagation(); handlers.richClick(n.id, block.type); });
+      fo.appendChild(div); g.appendChild(fo);
+      y += Math.ceil(block.size.h / n.richLineH) * n.richLineH + 4;
+      continue;
+    }
     for (const line of block.lines) {
       const t = svgEl("text", {
         class: "fp-rich-line",
@@ -226,25 +258,7 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
         "data-type": block.type
       });
 
-      // Render links and lightweight Markdown emphasis as SVG tspans.
-      const parts = (line || " ").split(/(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g);
-      for (const part of parts) {
-        if (!part) continue;
-        const m = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
-        if (m) {
-          const ts = svgEl("tspan", { class: "fp-rich-link", "data-href": m[2] });
-          ts.textContent = m[2];                   // show name without brackets
-          t.appendChild(ts);
-        } else {
-          const both = /^\*\*\*([^*\n]+)\*\*\*$/.exec(part);
-          const bold = /^\*\*([^*\n]+)\*\*$/.exec(part) || /^__([^_\n]+)__$/.exec(part);
-          const italic = /^\*([^*\n]+)\*$/.exec(part) || /^_([^_\n]+)_$/.exec(part);
-          const ts = svgEl("tspan", both ? { "font-weight": "700", "font-style": "italic" }
-            : bold ? { "font-weight": "700" } : italic ? { "font-style": "italic" } : {});
-          ts.textContent = both?.[1] || bold?.[1] || italic?.[1] || part;
-          t.appendChild(ts);
-        }
-      }
+      appendInlineRuns(t, line || " ");
 
       // single click on plain text = manual double-click detection target
       t.addEventListener("click", (e: MouseEvent) => {
@@ -257,6 +271,28 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
       y += n.richLineH;
     }
     y += 4;                                        // gap between blocks
+  }
+}
+
+/** Render lightweight emphasis and wikilinks without an HTML foreignObject. */
+function appendInlineRuns(parent: SVGTextElement, line: string) {
+  const parts = line.split(/(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g);
+  for (const part of parts) {
+    if (!part) continue;
+    const link = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
+    if (link) {
+      const tspan = svgEl("tspan", { class: "fp-rich-link", "data-href": link[2] });
+      tspan.textContent = link[2];
+      parent.appendChild(tspan);
+      continue;
+    }
+    const both = /^\*\*\*([^*\n]+)\*\*\*$/.exec(part);
+    const bold = /^\*\*([^*\n]+)\*\*$/.exec(part) || /^__([^_\n]+)__$/.exec(part);
+    const italic = /^\*([^*\n]+)\*$/.exec(part) || /^_([^_\n]+)_$/.exec(part);
+    const tspan = svgEl("tspan", both ? { "font-weight": "700", "font-style": "italic" }
+      : bold ? { "font-weight": "700" } : italic ? { "font-style": "italic" } : {});
+    tspan.textContent = both?.[1] || bold?.[1] || italic?.[1] || part;
+    parent.appendChild(tspan);
   }
 }
 
@@ -276,10 +312,4 @@ function edgePath(from: any, to: any): string {
     const mx = (x1 + x2) / 2;
     return `M ${x1} ${fromY} C ${mx} ${fromY}, ${mx} ${toY}, ${x2} ${toY}`;
   }
-}
-
-/** Truncate very long lines for display (full text stays in the file). */
-function displayText(text: string): string {
-  if (!text) return " ";
-  return text.length > 80 ? text.slice(0, 79) + "…" : text;
 }

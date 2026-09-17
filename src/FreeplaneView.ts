@@ -9,6 +9,7 @@ import { settings } from "./settings";
 import { matchAction } from "./hotkeys";
 import { hashText, recoveryKey, readEnvelope, writeEnvelope, readCache, writeCache, deleteRecovery } from "./recovery";
 import { askRecovery, askConfirm } from "./ui/RecoveryPrompt";
+import { RenameFile } from "./ui/RenameFile";
 
 export const VIEW_TYPE_FREEPLANE = "freeplane-mm-view";
 
@@ -35,6 +36,7 @@ export class FreeplaneView extends FileView {
   canvasEl!: HTMLElement;
   svg!: SVGSVGElement;
   sidebarEl!: HTMLElement;
+  panelUpdate: (() => void) | null = null;
   saving = false;
   lastSavedAt = 0;
   dragging: any = null;
@@ -48,6 +50,10 @@ export class FreeplaneView extends FileView {
   hoverLinkEl: any = null;
   hoverPop: any = null;
   recoveryTimer = 0;
+  keyboardEditSession: any = null;
+  keyboardViewportFrame = 0;
+  keyboardViewportTimer = 0;
+  keyboardRestoreToken = 0;
 
   constructor(leaf: WorkspaceLeaf, plugin: any) { super(leaf); this.plugin = plugin; }
   getViewType(): string { return VIEW_TYPE_FREEPLANE; }
@@ -68,11 +74,22 @@ export class FreeplaneView extends FileView {
     this.sidebarEl = this.contentEl.createDiv({ cls: "fp-sidebar" });
     if (this.sidebarHidden) this.sidebarEl.style.display = "none";
 
+    if (window.visualViewport) {
+      const viewport = window.visualViewport;
+      const changed = () => this.scheduleKeyboardViewportUpdate();
+      viewport.addEventListener("resize", changed);
+      viewport.addEventListener("scroll", changed);
+      this.register(() => {
+        viewport.removeEventListener("resize", changed);
+        viewport.removeEventListener("scroll", changed);
+      });
+    }
+
     // ALL hotkeys come from hotkeys.json, dispatched in capture phase
     this.registerDomEvent(window, "keydown", (e: KeyboardEvent) => {
       if (this.app.workspace.activeLeaf !== this.leaf) return;
-      if (this.isEditableTarget(e.target)) return;
       const action = matchAction(e);
+      if (this.isEditableTarget(e.target) && !(action === "freeplane:update-panel" && this.sidebarEl.contains(e.target as Node))) return;
       if (!action) return;
       e.preventDefault();
       e.stopPropagation();
@@ -127,7 +144,7 @@ export class FreeplaneView extends FileView {
 
     this.registerDomEvent(this.canvasEl, "contextmenu", (e: MouseEvent) => {
       const t = e.target as Element;
-      const link = t.closest?.("a.internal-link, a.external-link, .fp-rich-link");
+      const link = t.closest?.("a.internal-link, a.external-link, .fp-rich-link, .internal-embed");
       if (link) { e.preventDefault(); this.openLinkMenu(link, e); return; }
       if (t.closest && t.closest(".fp-node")) return;
       e.preventDefault();
@@ -192,9 +209,17 @@ export class FreeplaneView extends FileView {
   /** Execute a hotkey action id defined in hotkeys.json. */
   runAction(id: string) {
     switch (id) {
+      case "freeplane:update-panel": this.panelUpdate?.(); break;
+      case "freeplane:pan-up": this.canvasEl.scrollTop -= 100; break;
+      case "freeplane:pan-down": this.canvasEl.scrollTop += 100; break;
+      case "freeplane:pan-left": this.canvasEl.scrollLeft -= 100; break;
+      case "freeplane:pan-right": this.canvasEl.scrollLeft += 100; break;
+      case "freeplane:zoom-in": this.zoomStep(0.1); break;
+      case "freeplane:zoom-out": this.zoomStep(-0.1); break;
       case "freeplane:save": this.save(); break;
       case "freeplane:undo": this.undo(); break;
       case "freeplane:redo": this.redo(); break;
+      case "freeplane:center-node": this.centerSelectedNode(); break;
       case "freeplane:rename": if (this.selectedId) this.startTextEdit(this.selectedId); break;
       case "freeplane:edit-details": if (this.selectedId) this.startRichEdit(this.selectedId, "DETAILS"); break;
       case "freeplane:edit-note": if (this.selectedId) this.startRichEdit(this.selectedId, "NOTE"); break;
@@ -226,8 +251,128 @@ export class FreeplaneView extends FileView {
   }
   async onClose() {
     try { await this.flushRecovery(); } catch {}
+    if (this.keyboardViewportFrame) window.cancelAnimationFrame(this.keyboardViewportFrame);
+    if (this.keyboardViewportTimer) window.clearTimeout(this.keyboardViewportTimer);
+    this.keyboardEditSession = null;
+    this.clearKeyboardCanvasSize();
     const proto: any = Object.getPrototypeOf(Object.getPrototypeOf(this));
     try { if (proto?.onClose) await proto.onClose.call(this); } catch (e) { console.error(e); }
+  }
+
+  beginKeyboardEdit(id: string, editor: HTMLTextAreaElement) {
+    this.keyboardRestoreToken++;
+    const viewport = window.visualViewport;
+    this.keyboardEditSession = {
+      id, editor,
+      scrollLeft: this.canvasEl.scrollLeft,
+      scrollTop: this.canvasEl.scrollTop,
+      baselineHeight: Math.min(viewport?.height || Number.POSITIVE_INFINITY, window.innerHeight),
+      keyboardVisible: false,
+      finished: false,
+      centerGeneration: 0
+    };
+    const session = this.keyboardEditSession;
+    for (const delay of [150, 350, 650]) {
+      window.setTimeout(() => {
+        if (this.keyboardEditSession === session) this.scheduleKeyboardViewportUpdate();
+      }, delay);
+    }
+  }
+
+  finishKeyboardEdit(editor: HTMLTextAreaElement) {
+    const session = this.keyboardEditSession;
+    if (!session || session.editor !== editor) return;
+    session.finished = true;
+    this.scheduleKeyboardViewportUpdate();
+  }
+
+  scheduleKeyboardViewportUpdate() {
+    if (!this.keyboardEditSession) return;
+    if (this.keyboardViewportFrame) window.cancelAnimationFrame(this.keyboardViewportFrame);
+    if (this.keyboardViewportTimer) window.clearTimeout(this.keyboardViewportTimer);
+    this.keyboardViewportFrame = window.requestAnimationFrame(() => {
+      this.keyboardViewportFrame = 0;
+      this.updateKeyboardEditViewport();
+      this.keyboardViewportTimer = window.setTimeout(() => {
+        this.keyboardViewportTimer = 0;
+        this.updateKeyboardEditViewport();
+      }, 80);
+    });
+  }
+
+  updateKeyboardEditViewport() {
+    const session = this.keyboardEditSession;
+    if (!session || !this.canvasEl?.isConnected) return;
+    const viewport = window.visualViewport;
+    const currentHeight = Math.min(viewport?.height || Number.POSITIVE_INFINITY, window.innerHeight);
+    const threshold = Math.max(100, session.baselineHeight * 0.15);
+    const keyboardVisible = currentHeight < session.baselineHeight - threshold;
+    if (keyboardVisible) {
+      session.keyboardVisible = true;
+      if (!session.finished) {
+        const generation = ++session.centerGeneration;
+        const center = () => {
+          if (this.keyboardEditSession !== session || session.finished || session.centerGeneration !== generation) return;
+          this.sizeCanvasForKeyboard();
+          this.centerNodeInVisibleArea(session.id);
+        };
+        center();
+        // Android may apply its native focus pan after the first viewport
+        // resize event. Re-center through the full keyboard animation.
+        window.setTimeout(center, 120);
+        window.setTimeout(center, 280);
+        window.setTimeout(center, 500);
+      }
+      return;
+    }
+    if (session.keyboardVisible || session.finished) this.restorePreKeyboardPosition(session);
+  }
+
+  centerNodeInVisibleArea(id: string) {
+    const node = this.layout?.byId?.[id];
+    const viewBox = this.layout?.viewBox as number[] | undefined;
+    if (!node || !viewBox) return;
+    const centerX = (node.x + node.width / 2 - viewBox[0]) * this.zoom;
+    const centerY = (node.y + node.height / 2 - viewBox[1]) * this.zoom;
+    this.canvasEl.scrollLeft = centerX - this.canvasEl.clientWidth / 2;
+    this.canvasEl.scrollTop = centerY - this.canvasEl.clientHeight / 2;
+  }
+
+  sizeCanvasForKeyboard() {
+    const viewport = window.visualViewport;
+    const visibleHeight = Math.min(viewport?.height || Number.POSITIVE_INFINITY, window.innerHeight);
+    const top = Math.max(0, this.contentEl.getBoundingClientRect().top);
+    const height = Math.max(120, Math.floor(visibleHeight - top));
+    const px = `${height}px`;
+    this.contentEl.style.setProperty("height", px, "important");
+    this.contentEl.style.setProperty("max-height", px, "important");
+    this.contentEl.style.setProperty("flex", `0 0 ${px}`, "important");
+    this.canvasEl.style.setProperty("height", "100%", "important");
+  }
+
+  clearKeyboardCanvasSize() {
+    if (!this.contentEl || !this.canvasEl) return;
+    this.contentEl.style.removeProperty("height");
+    this.contentEl.style.removeProperty("max-height");
+    this.contentEl.style.removeProperty("flex");
+    this.canvasEl.style.removeProperty("height");
+  }
+
+  restorePreKeyboardPosition(session: any) {
+    if (this.keyboardEditSession !== session) return;
+    this.keyboardEditSession = null;
+    this.clearKeyboardCanvasSize();
+    const token = ++this.keyboardRestoreToken;
+    const restore = () => {
+      if (this.keyboardRestoreToken !== token || !this.canvasEl?.isConnected) return;
+      this.canvasEl.scrollLeft = session.scrollLeft;
+      this.canvasEl.scrollTop = session.scrollTop;
+    };
+    window.requestAnimationFrame(() => {
+      restore();
+      window.requestAnimationFrame(restore);
+      window.setTimeout(restore, 120);
+    });
   }
 
   async onLoadFile(file: TFile) {
@@ -315,7 +460,7 @@ export class FreeplaneView extends FileView {
       const n = this.layout?.byId?.[id];
       if (!n) return;
       div.innerHTML = "";
-      try { await (MarkdownRenderer as any).render(this.app, toMarkdown(n.text), div, source, comp); }
+      try { await (MarkdownRenderer as any).render(this.app, toMarkdown(div.getAttribute("data-source") ?? n.text), div, source, comp); }
       catch { div.textContent = n.text; }
     }));
     if (token !== this.mdPass) return;
@@ -331,7 +476,7 @@ export class FreeplaneView extends FileView {
     const divs = Array.from(this.svg.querySelectorAll(".fp-md")) as HTMLElement[];
     let changed = false;
     for (const div of divs) {
-      const id = div.getAttribute("data-id") || "";
+      const id = (div.getAttribute("data-id") || "") + (div.hasAttribute("data-type") ? ":" + div.getAttribute("data-type") : "");
       const w = Math.max(60, Math.ceil(div.scrollWidth) + 2);
       const h = Math.max(30, Math.ceil(div.scrollHeight) + 2);
       const used = this.mdSizes[id];
@@ -469,7 +614,7 @@ export class FreeplaneView extends FileView {
     if (link === this.hoverLinkEl) return;
     this.hidePreview();
     this.hoverLinkEl = link;
-    if (link && (e.ctrlKey || e.metaKey)) this.showPreview(link);
+    if (link && (e.ctrlKey || e.metaKey)) this.showPreview(link, e);
   }
   onLinkHoverOut(e: MouseEvent) {
     const t = e.target as Element;
@@ -478,40 +623,27 @@ export class FreeplaneView extends FileView {
     const to = e.relatedTarget as Element | null;
     if (to && link.contains(to)) return;
     this.hoverLinkEl = null;
-    this.hidePreview();
+    // Obsidian owns the popover's leave delay and allows moving into it.
+    this.hoverPop = null;
   }
   setCtrlPreview(on: boolean) {
     if (on && this.hoverLinkEl) this.showPreview(this.hoverLinkEl);
     else if (!on) this.hidePreview();
   }
-  async showPreview(link: Element) {
-    this.hidePreview();
+  showPreview(link: Element, event?: MouseEvent) {
+    if (this.hoverPop === link) return;
     const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
     if (!href) return;
-    const target = (this.app.metadataCache as any).getFirstLinkpathDest(href, this.file?.path || "");
+    const target = this.resolveLinkedFile(href);
     if (!target) return;
-    const el = document.body.createDiv({ cls: "fp-preview" });
-    const rect = link.getBoundingClientRect();
-    el.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 420)) + "px";
-    el.style.top = rect.bottom + 6 + "px";
-    const comp = new Component();
-    try { this.addChild(comp); } catch {}
-    this.hoverPop = { el, comp };
-    try {
-      if (target.extension === "md") {
-        const text = await this.app.vault.cachedRead(target);
-        await (MarkdownRenderer as any).render(this.app, text, el, target.path, comp);
-      } else {
-        await (MarkdownRenderer as any).render(this.app, "![[" + target.name + "]]", el, this.file?.path || "", comp);
-      }
-    } catch { el.textContent = target.path; }
+    this.hoverPop = link;
+    this.app.workspace.trigger("hover-link", {
+      event, source: VIEW_TYPE_FREEPLANE, hoverParent: this,
+      targetEl: link, linktext: href.split("|")[0], sourcePath: this.file?.path || ""
+    });
   }
   hidePreview() {
-    if (!this.hoverPop) return;
-    const pop = this.hoverPop;
     this.hoverPop = null;
-    try { this.removeChild(pop.comp); } catch {}
-    pop.el.remove();
   }
 
   fitMap() {
@@ -531,6 +663,14 @@ export class FreeplaneView extends FileView {
     const vb = this.layout.viewBox as number[], b = this.layout.bounds as number[];
     if (!vb || !b) return;
     const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    this.canvasEl.scrollLeft = (cx - vb[0]) * this.zoom - this.canvasEl.clientWidth / 2;
+    this.canvasEl.scrollTop = (cy - vb[1]) * this.zoom - this.canvasEl.clientHeight / 2;
+  }
+  centerSelectedNode() {
+    if (!this.layout || !this.canvasEl || !this.selectedId) return;
+    const n = this.layout.byId?.[this.selectedId], vb = this.layout.viewBox as number[];
+    if (!n || !vb) return;
+    const cx = n.x + n.width / 2, cy = n.y + n.height / 2;
     this.canvasEl.scrollLeft = (cx - vb[0]) * this.zoom - this.canvasEl.clientWidth / 2;
     this.canvasEl.scrollTop = (cy - vb[1]) * this.zoom - this.canvasEl.clientHeight / 2;
   }
@@ -586,27 +726,37 @@ export class FreeplaneView extends FileView {
   }
 
   openLinkMenu(link: Element, e: MouseEvent) {
-    const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+    const href = link.getAttribute("data-href") || link.getAttribute("href") || link.getAttribute("src") || "";
     if (!href) return;
     const menu = new Menu();
     menu.addItem((it) => it.setTitle("Open").onClick(() => this.openLink(href, false)));
     menu.addItem((it) => it.setTitle("Open in new tab").onClick(() => this.openLink(href, true)));
     menu.addItem((it) => it.setTitle("Open with default app").onClick(() => this.openLinkDefault(href)));
+    menu.addItem((it) => it.setTitle("Rename").onClick(() => {
+      const file = this.resolveLinkedFile(href);
+      if (file) new RenameFile(this.app, file).open();
+    }));
     menu.showAtMouseEvent(e);
   }
   openLink(href: string, newTab: boolean) {
     if (/^(https?|mailto):/i.test(href)) { window.open(href, newTab ? "_blank" : "_self"); return; }
     this.app.workspace.openLinkText(href, this.file?.path || "", newTab ? "tab" : false);
   }
+  resolveLinkedFile(href: string): TFile | null {
+    const path = href.split("|")[0].split("#")[0];
+    let decoded = path;
+    try { decoded = decodeURIComponent(path); } catch {}
+    return this.app.metadataCache.getFirstLinkpathDest(decoded, this.file?.path || "");
+  }
   async openLinkDefault(href: string) {
     if (/^(https?|mailto):/i.test(href)) { window.open(href, "_blank"); return; }
-    const target = (this.app.metadataCache as any).getFirstLinkpathDest(href, this.file?.path || "");
+    const target = this.resolveLinkedFile(href);
     if (!(target instanceof TFile)) { new Notice("Linked file not found."); return; }
     try {
       const appAny = this.app as any;
       const adapter = this.app.vault.adapter as any;
       const fullPath = typeof adapter.getFullPath === "function" ? adapter.getFullPath(target.path) : target.path;
-      if (typeof appAny.openWithDefaultApp === "function") await appAny.openWithDefaultApp(fullPath);
+      if (typeof appAny.openWithDefaultApp === "function") await appAny.openWithDefaultApp(target.path);
       else {
         const electron = (window as any).require?.("electron");
         if (!electron?.shell?.openPath) throw new Error("Desktop shell is unavailable");
@@ -657,6 +807,7 @@ export class FreeplaneView extends FileView {
 
   renderSidebar() {
     this.sidebarEl.empty();
+    this.panelUpdate = null;
     if (!this.doc) return;
     if (!this.selectedId) {
       const zr = this.sidebarEl.createDiv({ cls: "fp-zoom-row" });
@@ -694,6 +845,7 @@ export class FreeplaneView extends FileView {
       catch (e: any) { new Notice("Node not updated: " + (e?.message || String(e))); }
     };
     update.addEventListener("click", doUpdate);
+    this.panelUpdate = doUpdate;
   }
 
   richLineClicked(id: string, type: "DETAILS" | "NOTE") {
@@ -792,7 +944,6 @@ export class FreeplaneView extends FileView {
       }
       return;
     }
-    if (child.getAttribute("FOLDED") === "true") { child.removeAttribute("FOLDED"); changed = true; }
     this.selectedId = child.getAttribute("ID");
     if (changed) this.commit(before); else this.renderAll();
   }
@@ -853,12 +1004,39 @@ export class FreeplaneView extends FileView {
     if (cut) this.deleteSelectedNodes();
   }
   onClipboardPaste(e: ClipboardEvent) {
+    if (this.app.workspace.activeLeaf === this.leaf) {
+      const images = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith("image/"));
+      if (images.length && this.selectedId) {
+        e.preventDefault();
+        void this.pasteImages(images, e.target).catch(err => new Notice(String(err)));
+        return;
+      }
+    }
     if (this.app.workspace.activeLeaf !== this.leaf || this.isEditableTarget(e.target) || !this.selectedId) return;
     const xml = e.clipboardData?.getData("application/x-freeplane-node+xml") || "";
     const text = e.clipboardData?.getData("text/plain") || "";
     if (!xml.trim() && !text.trim()) return;
     e.preventDefault();
     if (!xml.trim() || !this.pasteNodeXml(xml)) this.pasteOutline(text);
+  }
+  async pasteImages(images: Blob[], target: EventTarget | null = null) {
+    const doc = this.doc, id = this.selectedId, source = this.file?.path;
+    if (!doc || !id) return;
+    const links: string[] = [];
+    for (const image of images) {
+      const ext = image.type.split("/")[1].replace("jpeg", "jpg").replace("svg+xml", "svg");
+      const path = await this.app.fileManager.getAvailablePathForAttachment(`Pasted image ${Date.now()}.${ext}`, source);
+      await this.app.vault.createBinary(path, await image.arrayBuffer());
+      links.push(`![[${path}]]`);
+    }
+    if (this.doc !== doc) return;
+    if (target instanceof HTMLTextAreaElement && target.isConnected) {
+      target.setRangeText(links.join("\n"), target.selectionStart, target.selectionEnd, "end");
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      const el = nodeById(doc, id);
+      if (el) this.updateNodeText(id, [el.getAttribute("TEXT"), ...links].filter(Boolean).join("\n"));
+    }
   }
   copyToSystemClipboard(cut: boolean) {
     if (!this.clipboardOutline()) return;
@@ -874,6 +1052,8 @@ export class FreeplaneView extends FileView {
       if (clipboard.read) {
         const items = await clipboard.read();
         for (const item of items) {
+          const imageType = item.types.find((type: string) => type.startsWith("image/"));
+          if (imageType) { await this.pasteImages([await item.getType(imageType)]); return; }
           const xmlType = item.types.find((type: string) => type === "application/x-freeplane-node+xml" || type === "web application/x-freeplane-node+xml");
           if (xmlType && this.pasteNodeXml(await (await item.getType(xmlType)).text())) return;
         }
@@ -1250,7 +1430,13 @@ export class FreeplaneView extends FileView {
     if (hint.mode === "after") ordered.reverse();
     let changed = false;
     for (const el of ordered) {
-      const id = el.getAttribute("ID") || "";
+      let moving = el;
+      if (_e.ctrlKey || _e.metaKey) {
+        moving = el.cloneNode(true) as Element;
+        for (const n of [moving, ...Array.from(moving.querySelectorAll("node"))]) n.setAttribute("ID", this.generateNodeId());
+        el.parentElement!.appendChild(moving);
+      }
+      const id = moving.getAttribute("ID") || "";
       changed = moveNode(this.doc, id, hint.id, hint.mode, hint.side) || changed;
     }
     if (changed) this.commit(before); else this.renderAll();
@@ -1295,6 +1481,7 @@ export class FreeplaneView extends FileView {
   }
 
   startTextEdit(id: string) {
+    if (!this.sidebarHidden) { this.focusPanel(id, 0); return; }
     const n = this.layout?.byId?.[id];
     if (!n) return;
     const nodeG = this.svg.querySelector('.fp-node[data-id="' + cssEscape(id) + '"]') as SVGGElement | null;
@@ -1320,17 +1507,19 @@ export class FreeplaneView extends FileView {
     resizeEdit();
     input.addEventListener("input", resizeEdit);
     let done = false;
-    const commit = () => { if (done) return; done = true; const v = input.value; input.remove(); this.updateNodeText(id, v); };
-    const cancel = () => { if (done) return; done = true; input.remove(); };
+    const commit = () => { if (done) return; done = true; const v = input.value; this.finishKeyboardEdit(input); input.remove(); this.updateNodeText(id, v); };
+    const cancel = () => { if (done) return; done = true; this.finishKeyboardEdit(input); input.remove(); };
     input.addEventListener("keydown", (e: KeyboardEvent) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); } if (e.key === "Escape") { e.preventDefault(); cancel(); } });
     input.addEventListener("blur", () => commit());
     this.canvasEl.appendChild(input);
-    input.focus();
+    this.beginKeyboardEdit(id, input);
+    input.focus({ preventScroll: true });
     const tl = input.value.length;
     input.setSelectionRange(tl, tl);
   }
 
   startRichEdit(id: string, type: "DETAILS" | "NOTE") {
+    if (!this.sidebarHidden) { this.focusPanel(id, type === "DETAILS" ? 1 : 2); return; }
     if (!this.doc) return;
     const n = this.layout?.byId?.[id];
     const el = nodeById(this.doc, id);
@@ -1347,14 +1536,20 @@ export class FreeplaneView extends FileView {
     ta.style.width = `${Math.max(n.width, 320)}px`;
     ta.style.height = `120px`;
     let done = false;
-    const commit = () => { if (done) return; done = true; const v = ta.value; ta.remove(); this.updateRichContent(id, type, v); };
-    const cancel = () => { if (done) return; done = true; ta.remove(); };
+    const commit = () => { if (done) return; done = true; const v = ta.value; this.finishKeyboardEdit(ta); ta.remove(); this.updateRichContent(id, type, v); };
+    const cancel = () => { if (done) return; done = true; this.finishKeyboardEdit(ta); ta.remove(); };
     ta.addEventListener("keydown", (e: KeyboardEvent) => { e.stopPropagation(); if (e.key === "Escape") { e.preventDefault(); cancel(); } if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); } });
     ta.addEventListener("blur", () => commit());
     this.canvasEl.appendChild(ta);
-    ta.focus();
+    this.beginKeyboardEdit(id, ta);
+    ta.focus({ preventScroll: true });
     const tl2 = ta.value.length;
     ta.setSelectionRange(tl2, tl2);
+  }
+
+  focusPanel(id: string, field: number) {
+    if (this.selectedId !== id) { this.selectOnly(id); this.renderAll(); }
+    this.sidebarEl.querySelectorAll("textarea")[field]?.focus();
   }
 
   /** Debounced stash write after every commit. */
