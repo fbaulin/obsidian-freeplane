@@ -41,6 +41,24 @@
   display: block;
 }
 
+.fp-search-bar {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 6px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+.fp-search-bar input { width: 230px; min-width: 60px; flex: 1; }
+.fp-search-bar span { white-space: nowrap; }
+.fp-search-bar button { padding: 4px 8px; }
+
 .fp-node .fp-fold, .fp-node .fp-rich-toggle, .fp-node .fp-rich-edit {
   stroke: transparent;
   fill: var(--background-modifier-border);

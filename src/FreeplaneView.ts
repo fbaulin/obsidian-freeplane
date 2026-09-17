@@ -37,6 +37,10 @@ export class FreeplaneView extends FileView {
   svg!: SVGSVGElement;
   sidebarEl!: HTMLElement;
   panelUpdate: (() => void) | null = null;
+  searchQuery = "";
+  searchBar: HTMLElement | null = null;
+  searchInput: HTMLInputElement | null = null;
+  searchCount: HTMLElement | null = null;
   saving = false;
   lastSavedAt = 0;
   dragging: any = null;
@@ -126,15 +130,24 @@ export class FreeplaneView extends FileView {
     this.registerDomEvent(this.canvasEl, "touchcancel", (e: TouchEvent) => this.onTouchEnd(e), { passive: false } as any);
 
     this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
+      const anchor = (e.target as Element).closest?.('a[href^="#fp-node:"]');
+      if (!anchor) return;
+      e.preventDefault(); e.stopPropagation();
+      this.openLink(anchor.getAttribute("href") || "", false);
+    }, true);
+
+    this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
       if (this.suppressNextClick) { this.suppressNextClick = false; return; }
       if (this.isEditableTarget(e.target)) return;
       const t = e.target as Element;
       const link = t.closest ? t.closest("a.internal-link, a.external-link, .fp-rich-link") : null;
       if (link) {
+        const localHref = link.getAttribute("href") || "";
+        if (localHref.startsWith("#fp-node:")) { e.preventDefault(); e.stopPropagation(); this.openLink(localHref, false); return; }
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault(); e.stopPropagation();
           const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
-          if (href) this.app.workspace.openLinkText(href, this.file?.path || "", false);
+          if (href) this.openLink(href, false);
         }
         return;
       }
@@ -209,6 +222,9 @@ export class FreeplaneView extends FileView {
   /** Execute a hotkey action id defined in hotkeys.json. */
   runAction(id: string) {
     switch (id) {
+      case "freeplane:search": this.openSearchBar(); break;
+      case "freeplane:search-next": this.searchNode(1); break;
+      case "freeplane:search-previous": this.searchNode(-1); break;
       case "freeplane:update-panel": this.panelUpdate?.(); break;
       case "freeplane:pan-up": this.canvasEl.scrollTop -= 100; break;
       case "freeplane:pan-down": this.canvasEl.scrollTop += 100; break;
@@ -739,6 +755,7 @@ export class FreeplaneView extends FileView {
     menu.showAtMouseEvent(e);
   }
   openLink(href: string, newTab: boolean) {
+    if (href.startsWith("#fp-node:")) { this.revealNode(href.slice(9)); return; }
     if (/^(https?|mailto):/i.test(href)) { window.open(href, newTab ? "_blank" : "_self"); return; }
     this.app.workspace.openLinkText(href, this.file?.path || "", newTab ? "tab" : false);
   }
@@ -1685,6 +1702,47 @@ export class FreeplaneView extends FileView {
   }
 
   attachSuggest(input: any) { new LinkSuggest(this, input); }
+  openSearchBar() {
+    if (!this.searchBar) {
+      this.contentEl.style.position = "relative";
+      this.searchBar = this.contentEl.createDiv({ cls: "fp-search-bar" });
+      this.searchInput = this.searchBar.createEl("input", { type: "text", placeholder: "Search map", value: this.searchQuery });
+      this.searchInput.setAttribute("aria-label", "Search map");
+      this.searchCount = this.searchBar.createSpan({ text: "0/0" });
+      const prev = this.searchBar.createEl("button", { text: "←", attr: { "aria-label": "Previous match" } });
+      const next = this.searchBar.createEl("button", { text: "→", attr: { "aria-label": "Next match" } });
+      const close = this.searchBar.createEl("button", { text: "×", attr: { "aria-label": "Close search" } });
+      prev.onclick = () => { this.searchNode(-1); prev.blur(); };
+      next.onclick = () => { this.searchNode(1); next.blur(); };
+      close.onclick = () => { this.searchBar!.style.display = "none"; close.blur(); };
+      this.searchInput.onkeydown = e => {
+        e.stopPropagation();
+        if (e.key === "Enter") { e.preventDefault(); this.searchQuery = this.searchInput!.value; this.searchNode(1, true); this.searchInput!.blur(); }
+        if (e.key === "Escape") { this.searchBar!.style.display = "none"; this.searchInput!.blur(); }
+      };
+    }
+    this.searchBar.style.display = "flex";
+    this.searchInput!.focus(); this.searchInput!.select();
+  }
+  searchNode(direction: number, first = false) {
+    const query = this.searchQuery.trim().toLocaleLowerCase();
+    if (!query || !this.doc) { if (this.searchCount) this.searchCount.textContent = "0/0"; return; }
+    const hits = Array.from(this.doc.querySelectorAll("node")).filter(el =>
+      [el.getAttribute("TEXT"), richContentSource(el, "DETAILS"), richContentSource(el, "NOTE")].join("\n").toLocaleLowerCase().includes(query));
+    if (!hits.length) { if (this.searchCount) this.searchCount.textContent = "0/0"; return; }
+    const current = hits.findIndex(el => el.getAttribute("ID") === this.selectedId);
+    const index = first || current < 0 ? (direction > 0 ? 0 : hits.length - 1) : (current + direction + hits.length) % hits.length;
+    this.revealNode(hits[index].getAttribute("ID") || "");
+    if (this.searchCount) this.searchCount.textContent = `${index + 1}/${hits.length}`;
+  }
+  revealNode(id: string) {
+    if (!this.doc) return;
+    const el = nodeById(this.doc, id);
+    if (!el) { new Notice("Referenced node not found."); return; }
+    for (let parent = el.parentElement; parent?.nodeName.toLowerCase() === "node"; parent = parent.parentElement) parent.removeAttribute("FOLDED");
+    this.selectOnly(id); this.richExpanded.add(id); this.renderAll();
+    requestAnimationFrame(() => this.centerSelectedNode());
+  }
   isEditableTarget(target: EventTarget | null): boolean {
     if (!target) return false;
     const el = target as HTMLElement;
@@ -1697,6 +1755,7 @@ class LinkSuggest {
   popup: HTMLElement | null = null;
   items: any[] = []; index = 0; open = false;
   matchStart = 0; partialEnd = 0; embed = false; query = "";
+  nodeMode = false;
   constructor(view: any, input: any) {
     this.view = view; this.input = input;
     input.addEventListener("keydown", (e: KeyboardEvent) => this.handleKey(e));
@@ -1719,7 +1778,12 @@ class LinkSuggest {
   update() {
     const caret = this.input.selectionStart ?? this.input.value.length;
     const upto = this.input.value.slice(0, caret);
-    const m = /(!?)\[\[([^\[\]]*)$/.exec(upto);
+    let m: string[] | null = /(!?)\[\[([^\[\]]*)$/.exec(upto);
+    this.nodeMode = false;
+    if (!m) {
+      const single = /(?:^|[^!\[])\[([^\[\]\n]+)$/.exec(upto);
+      if (single) { m = ["[" + single[1], "", single[1]]; this.nodeMode = true; }
+    }
     if (!m) { this.close(); return; }
     this.embed = m[1] === "!";
     this.matchStart = caret - m[0].length;
@@ -1728,9 +1792,14 @@ class LinkSuggest {
     this.buildList();
     if (this.items.length) this.showPopup(); else this.close();
   }
-  label(f: any): string { return f.extension === "md" ? f.basename : f.name; }
+  label(f: any): string { return f.nodeId ? f.name : f.extension === "md" ? f.basename : f.name; }
   buildList() {
     const q = this.query.toLowerCase();
+    if (this.nodeMode) {
+      this.items = Array.from(this.view.doc?.querySelectorAll("node") || []).map((el: any) => ({ nodeId: el.getAttribute("ID"), name: el.getAttribute("TEXT") || "Untitled node" }))
+        .filter((item: any) => item.nodeId && item.name.toLowerCase().includes(q)).slice(0, 8);
+      this.index = 0; return;
+    }
     const cur = this.view.file?.path;
     const files = this.view.app.vault.getAllLoadedFiles().filter((f: any) => f instanceof TFile && f.path !== cur);
     const hits = files.map((f) => ({ f, l: this.label(f) })).filter((x) => !q || x.l.toLowerCase().includes(q) || x.f.path.toLowerCase().includes(q));
@@ -1756,13 +1825,15 @@ class LinkSuggest {
     this.open = true;
   }
   accept(f: any) {
-    const insert = (this.embed ? "![[" : "[[") + this.label(f) + "]]";
+    const insert = f.nodeId ? `[${this.label(f).replace(/[\[\]\n]/g, " ")}](#fp-node:${f.nodeId})`
+      : (this.embed ? "![[" : "[[") + this.label(f) + "]]";
     const v = this.input.value;
     const caret = this.input.selectionStart ?? this.partialEnd;
     this.input.value = v.slice(0, this.matchStart) + insert + v.slice(caret);
     const pos = this.matchStart + insert.length;
     this.input.setSelectionRange(pos, pos);
     this.input.focus();
+    this.input.dispatchEvent(new Event("input", { bubbles: true }));
     this.close();
   }
   close() { this.open = false; if (this.popup) this.popup.style.display = "none"; }

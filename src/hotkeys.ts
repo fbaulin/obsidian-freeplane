@@ -1,5 +1,8 @@
 export interface HotkeyBinding { modifiers: string[]; key: string; }
 export const DEFAULT_HOTKEYS: Record<string, HotkeyBinding[]> = {
+  "freeplane:search": [{ modifiers: ["Mod"], key: "f" }],
+  "freeplane:search-next": [{ modifiers: [], key: "n" }],
+  "freeplane:search-previous": [{ modifiers: ["Shift"], key: "n" }],
   "freeplane:update-panel": [{ modifiers: ["Mod"], key: "Enter" }],
   "freeplane:pan-up": [{ modifiers: ["Alt"], key: "ArrowUp" }],
   "freeplane:pan-down": [{ modifiers: ["Alt"], key: "ArrowDown" }],

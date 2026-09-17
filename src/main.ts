@@ -1,5 +1,6 @@
 import { Plugin, TFolder, TFile, Notice } from "obsidian";
 import { renamedLinks } from "./renameLinks";
+import { installSearchIndex } from "./searchIndex";
 import { serializeDoc, parseMm } from "./mm/xml";
 import { FreeplaneView, VIEW_TYPE_FREEPLANE } from "./FreeplaneView";
 import { readCache, writeCache } from "./recovery";
@@ -31,6 +32,7 @@ export default class FreeplanePlugin extends Plugin {
     // settings.json + hotkeys.json from the plugin folder (created if missing)
     await this.loadConfigFiles();
     await this.cleanupRecovery();
+    installSearchIndex(this);
 
     this.registerEvent(
       (this.app.workspace as any).on("file-menu", (menu: any, file: any) => {

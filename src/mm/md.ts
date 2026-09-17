@@ -8,7 +8,7 @@
 
 /** True when the node text needs the Markdown/MathJax rendering pass. */
 export function needsMarkdown(text: string): boolean {
-  return /\\latex|!\[\[|\$[^$]+\$/.test(text || "");
+  return /\\latex|!\[\[|\$[^$]+\$|\]\(#fp-node:/.test(text || "");
 }
 
 /** Hide Freeplane's rendering marker; existing $/$$ delimiters set math mode. */

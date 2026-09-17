@@ -6,6 +6,17 @@ The `.mm` file on disk is the authoritative source (read → mutate DOM → writ
 Targets: Obsidian 1.6.5 / 1.6.7 (no post-1.7 APIs), Freeplane 1.9.14 file format.
 
 ## Features
+- Map search: Ctrl+F opens a toolbar at the top of the canvas without an overlay.
+  Enter selects the first result and releases input focus; n / Shift+n or the arrow
+  buttons select next / previous matches. The toolbar displays the current count.
+  Searches titles, details and notes, including folded nodes. Configure freeplane:search,
+  freeplane:search-next and freeplane:search-previous in hotkeys.json.
+- Node references: type `[` followed by at least one character for same-map suggestions.
+  Enter/Tab inserts `[label](#fp-node:ID)`; click the rendered link to reveal the node.
+- Global search: generated Markdown files in `Freeplane search index` expose saved map
+  contents to Obsidian Search. Opening an index result redirects to the map view and
+  selects the node corresponding to the result line. Index paths retain Unicode names.
+  These generated notes refresh on map save/create/rename; do not edit them manually.
 - Custom file view: `.mm` files open in the mind-map view by default.
 - SVG rendering with Freeplane-style semantic layout (no x/y stored in file).
 - Fold/unfold via `FOLDED="true"`; DETAILS/NOTE visibility via `HIDDEN="true"`.
