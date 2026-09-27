@@ -15,6 +15,7 @@ export const VIEW_TYPE_FREEPLANE = "freeplane-mm-view";
 
 export class FreeplaneView extends FileView {
   plugin: any;
+  keyboardMenuUntil = 0;
   doc: Document | null = null;
   originalText = "";
   private _dirty = false;
@@ -124,6 +125,18 @@ export class FreeplaneView extends FileView {
     }, true);
 
     this.registerDomEvent(window, "copy", (e: ClipboardEvent) => this.onClipboardCopy(e, false));
+    // Windows may emit contextmenu on key release after our keydown shortcut
+    // already opened a menu. Catch it before it reaches the focused canvas.
+    this.registerDomEvent(window, "contextmenu", (e: MouseEvent) => {
+      if (Date.now() >= this.keyboardMenuUntil) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+    // Real mouse/touch interactions must retain their normal context menus.
+    this.registerDomEvent(window, "pointerdown", () => { this.keyboardMenuUntil = 0; }, true);
+    this.registerDomEvent(window, "keyup", (e: KeyboardEvent) => {
+      if (e.key === "ContextMenu" && this.keyboardMenuUntil) this.keyboardMenuUntil = Date.now() + 500;
+    }, true);
     this.registerDomEvent(window, "cut", (e: ClipboardEvent) => this.onClipboardCopy(e, true));
     this.registerDomEvent(window, "paste", (e: ClipboardEvent) => this.onClipboardPaste(e));
 
@@ -193,11 +206,7 @@ export class FreeplaneView extends FileView {
       if (link) { e.preventDefault(); this.openLinkMenu(link, e); return; }
       if (t.closest && t.closest(".fp-node")) return;
       e.preventDefault();
-      const menu = new Menu();
-      menu.addItem((it) => it.setTitle("Show/hide details").onClick(() => this.toggleAllDetails()));
-      menu.addItem((it) => it.setTitle("Fit map").onClick(() => this.fitMap()));
-      menu.addItem((it) => it.setTitle("Center map").onClick(() => this.centerOnContent()));
-      menu.showAtMouseEvent(e);
+      this.openCanvasMenu(e);
     });
 
     this.registerDomEvent(this.canvasEl, "pointerdown", (e: PointerEvent) => {
@@ -264,6 +273,16 @@ export class FreeplaneView extends FileView {
       this.renderAll();
     }
     switch (id) {
+      case "freeplane:context-menu": {
+        this.keyboardMenuUntil = Date.now() + 2000;
+        const node = this.selectedId ? this.svg.querySelector('.fp-node[data-id="' + cssEscape(this.selectedId) + '"]') : null;
+        const box = (node || this.canvasEl).getBoundingClientRect();
+        const e = new MouseEvent("contextmenu", { clientX: Math.max(0, Math.min(window.innerWidth - 20, box.left + 20)), clientY: Math.max(0, Math.min(window.innerHeight - 20, box.top + 20)) });
+        if (this.selectedId) this.openNodeMenu(this.selectedId, e); else this.openCanvasMenu(e);
+        break;
+      }
+      case "freeplane:rename-start": if (this.selectedId) this.startTextEdit(this.selectedId, "start"); break;
+      case "freeplane:rename-select-all": if (this.selectedId) this.startTextEdit(this.selectedId, "all"); break;
       case "freeplane:fold-subtree": this.toggleSubtree(); break;
       case "freeplane:search": this.openSearchBar(); break;
       case "freeplane:search-next": this.searchNode(1); break;
@@ -1047,6 +1066,7 @@ export class FreeplaneView extends FileView {
   }
 
   richLineClicked(id: string, type: "DETAILS" | "NOTE") {
+    if (this.selectedId !== id || this.selectedIds.size !== 1) this.selectNode(id);
     const now = Date.now();
     const last = this.lastRichClick;
     if (last && last.id === id && last.type === type && now - last.time < 450) { this.lastRichClick = null; this.startRichEdit(id, type); }
@@ -1158,6 +1178,14 @@ export class FreeplaneView extends FileView {
     menu.addItem((it) => it.setTitle(this.selectedIds.size > 1 ? "Delete selected" : "Delete").onClick(() => this.deleteSelectedNodes()));
     menu.addItem((it) => it.setTitle("Collapse all").onClick(() => this.collapseChildren(id)));
     menu.addItem((it) => it.setTitle("Expand all").onClick(() => this.expandAll(id)));
+    menu.showAtMouseEvent(e);
+  }
+
+  openCanvasMenu(e: MouseEvent) {
+    const menu = new Menu();
+    menu.addItem(it => it.setTitle("Show/hide details").onClick(() => this.toggleAllDetails()));
+    menu.addItem(it => it.setTitle("Fit map").onClick(() => this.fitMap()));
+    menu.addItem(it => it.setTitle("Center map").onClick(() => this.centerOnContent()));
     menu.showAtMouseEvent(e);
   }
   deleteNode(id: string) {
@@ -1737,8 +1765,13 @@ export class FreeplaneView extends FileView {
     }
   }
 
-  startTextEdit(id: string) {
-    if (!this.sidebarHidden) { this.focusPanel(id, 0); return; }
+  startTextEdit(id: string, caret: "start" | "end" | "all" = "end") {
+    if (!this.sidebarHidden) {
+      this.focusPanel(id, 0);
+      const input = this.sidebarEl.querySelector("textarea");
+      if (input) this.positionEditCaret(input, caret);
+      return;
+    }
     const n = this.layout?.byId?.[id];
     if (!n) return;
     const nodeG = this.svg.querySelector('.fp-node[data-id="' + cssEscape(id) + '"]') as SVGGElement | null;
@@ -1772,8 +1805,13 @@ export class FreeplaneView extends FileView {
     this.canvasEl.appendChild(input);
     this.beginKeyboardEdit(id, input);
     input.focus({ preventScroll: true });
-    const tl = input.value.length;
-    input.setSelectionRange(tl, tl);
+    this.positionEditCaret(input, caret);
+  }
+
+  positionEditCaret(input: HTMLTextAreaElement, caret: "start" | "end" | "all") {
+    const end = caret === "start" ? 0 : input.value.length;
+    input.setSelectionRange(caret === "all" ? 0 : end, end);
+    if (caret !== "end") input.scrollTop = 0;
   }
 
   startRichEdit(id: string, type: "DETAILS" | "NOTE") {

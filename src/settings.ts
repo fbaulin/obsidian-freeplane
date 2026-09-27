@@ -8,7 +8,7 @@ export interface FpSettings {
   detailsFontSize: number;
 }
 export const DEFAULT_SETTINGS: FpSettings = {
-  nodeMaxWidthSymbols: 60,
+  nodeMaxWidthSymbols: 50,
   touchpadPanSpeed: 1,
   touchpadZoomSpeed: 1,
   touchscreenPanSpeed: 1,

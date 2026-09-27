@@ -84,13 +84,15 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 | Ctrl+S / Ctrl+Z / Ctrl+Shift+Z | save / undo / redo |
 | Z | center the currently selected node |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste tab-indented node outlines |
-| Ctrl+E / Ctrl+D | rename node / edit DETAILS |
-| Ctrl+Space / Shift+Space / Space | toggle details preview / fold or unfold entire subtree / fold node |
+| E / D / Shift+E / S | edit node / edit DETAILS / edit at beginning / edit with all text selected |
+| Shift+Space / Ctrl+Space / Space | toggle details preview / fold or unfold entire subtree / fold node |
 | Arrows | navigate: siblings / parent / last-visited child (leaf: first↔last sibling) |
 | Shift+Arrows | extend selection; moving back retracts the previous step |
 | Ctrl+Arrows | move all selected nodes: reorder cyclic / promote / demote |
 | Enter / Shift+Enter / Insert / Delete | new sibling below / above / child / delete |
-| F2-free: double-click or Ctrl+E | rename |
+| Double-click or E | rename |
+| H/J/K/L (also with Shift or Ctrl) | navigation / extend selection / move nodes, matching arrows |
+| U / R / O / Shift+O / I / X | undo / redo / sibling below / sibling above / child / delete |
 
 ## XML safety rules
 - Only TEXT, FOLDED, HIDDEN, POSITION (top-level), richcontent children and
@@ -99,15 +101,18 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 - HTML named entities (`&nbsp;`…) are converted to numeric form on load.
 
 ## Known limitations
+- The keyboard Context Menu key opens the selected node's menu, or the canvas menu
+  when nothing is selected. Shift+E edits at the start; S edits with all text selected.
+  These bindings are configurable as context-menu, rename-start and rename-select-all
+  under the `freeplane:` prefix in hotkeys.json. Clicking details selects its node.
 - Link menus include **Show in navigation** and **Show in system explorer** (desktop).
   A normal link click selects its node; Ctrl-click opens the link. Wiki-link labels
   determine wrapping and width, including aliases, rather than the hidden link target.
 - Navigation clears extra selections and pans minimally to reveal the active node.
   Clicking a node returns hotkey focus to the map. Map headers show the filename.
-- Shift+Space collapses the selected subtree if any branch is expanded; otherwise
+- Ctrl+Space collapses the selected subtree if any branch is expanded; otherwise
   it expands all branches. Custom hotkey bindings are preserved when loading.
-  To assign Shift+Space to toggle-preview, also remove that binding from
-  fold-subtree (or assign fold-subtree a different shortcut).
+  Shift+Space toggles details. Existing hotkeys.json overrides the shipped defaults.
 - Embedded PDFs use a bounded 420 × 360 preview viewport so asynchronous PDF page
   loading cannot repeatedly resize and rebuild the map. Image embeds are unchanged.
 - Settings → Freeplane Mind Map exposes all settings.json options. Changes save
