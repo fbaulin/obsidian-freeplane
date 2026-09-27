@@ -85,7 +85,7 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 | Z | center the currently selected node |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste tab-indented node outlines |
 | Ctrl+E / Ctrl+D | rename node / edit DETAILS |
-| Ctrl+Space, Shift+Space, Space | toggle details preview / same / fold node |
+| Ctrl+Space / Shift+Space / Space | toggle details preview / fold or unfold entire subtree / fold node |
 | Arrows | navigate: siblings / parent / last-visited child (leaf: first↔last sibling) |
 | Shift+Arrows | extend selection; moving back retracts the previous step |
 | Ctrl+Arrows | move all selected nodes: reorder cyclic / promote / demote |
@@ -99,6 +99,17 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 - HTML named entities (`&nbsp;`…) are converted to numeric form on load.
 
 ## Known limitations
+- Link menus include **Show in navigation** and **Show in system explorer** (desktop).
+  A normal link click selects its node; Ctrl-click opens the link. Wiki-link labels
+  determine wrapping and width, including aliases, rather than the hidden link target.
+- Navigation clears extra selections and pans minimally to reveal the active node.
+  Clicking a node returns hotkey focus to the map. Map headers show the filename.
+- Shift+Space collapses the selected subtree if any branch is expanded; otherwise
+  it expands all branches. Custom hotkey bindings are preserved when loading.
+  To assign Shift+Space to toggle-preview, also remove that binding from
+  fold-subtree (or assign fold-subtree a different shortcut).
+- Embedded PDFs use a bounded 420 × 360 preview viewport so asynchronous PDF page
+  loading cannot repeatedly resize and rebuild the map. Image embeds are unchanged.
 - Settings → Freeplane Mind Map exposes all settings.json options. Changes save
   to that file and apply to open maps immediately. `detailsFontSize` defaults to
   12 pixels at 100% zoom and controls details viewing and editing (node text: 13 px).

@@ -73,6 +73,7 @@ export class FreeplaneView extends FileView {
   constructor(leaf: WorkspaceLeaf, plugin: any) { super(leaf); this.plugin = plugin; }
   getViewType(): string { return VIEW_TYPE_FREEPLANE; }
   getDisplayText(): string {
+    if (this.file) return this.file.basename;
     if (this.loadedPath) return this.loadedPath.split("/").pop() || "Freeplane map";
     return this.file ? this.file.basename : "Freeplane map";
   }
@@ -83,6 +84,12 @@ export class FreeplaneView extends FileView {
     this.contentEl.empty();
     this.contentEl.addClass("fp-view");
     this.canvasEl = this.contentEl.createDiv({ cls: "fp-canvas" });
+    this.canvasEl.tabIndex = 0;
+    this.registerDomEvent(this.canvasEl, "pointerdown", (e: PointerEvent) => {
+      if (this.isEditableTarget(e.target)) return;
+      this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
+      this.canvasEl.focus({ preventScroll: true });
+    }, true);
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg") as SVGSVGElement;
     this.svg.setAttribute("class", "fp-svg");
     this.canvasEl.appendChild(this.svg);
@@ -150,10 +157,15 @@ export class FreeplaneView extends FileView {
         this.suppressNextClick = false;
         e.preventDefault(); e.stopImmediatePropagation(); return;
       }
-      const anchor = (e.target as Element).closest?.('a[href^="#fp-node:"]');
+      const anchor = (e.target as Element).closest?.('a, .fp-rich-link, .internal-embed');
       if (!anchor) return;
       e.preventDefault(); e.stopPropagation();
-      this.openLink(anchor.getAttribute("href") || "", false);
+      const href = anchor.getAttribute("data-href") || anchor.getAttribute("href") || anchor.getAttribute("src") || "";
+      if (e.ctrlKey || e.metaKey) this.openLink(href, false);
+      else {
+        const id = anchor.closest(".fp-node")?.getAttribute("data-id");
+        if (id) this.selectNode(id, e.shiftKey);
+      }
     }, true);
 
     this.registerDomEvent(this.canvasEl, "click", (e: MouseEvent) => {
@@ -247,7 +259,12 @@ export class FreeplaneView extends FileView {
   }
 
   runAction(id: string) {
+    if (id.startsWith("freeplane:nav-") && this.selectedIds.size > 1) {
+      this.selectOnly(this.selectedId);
+      this.renderAll();
+    }
     switch (id) {
+      case "freeplane:fold-subtree": this.toggleSubtree(); break;
       case "freeplane:search": this.openSearchBar(); break;
       case "freeplane:search-next": this.searchNode(1); break;
       case "freeplane:search-previous": this.searchNode(-1); break;
@@ -496,6 +513,9 @@ export class FreeplaneView extends FileView {
       this.lastChildByParent.clear();
       this.syncRichExpanded();
       this.loadedPath = file.path;
+      (this.leaf as any).updateHeader?.();
+      const title = this.containerEl.querySelector(".view-header-title");
+      if (title) title.textContent = file.basename;
       this.history.clear();
       this.history.undoStack = rec.undo.slice(0, 50);   // restored undo history
       this.history.redoStack = rec.redo.slice(0, 50);
@@ -520,9 +540,12 @@ export class FreeplaneView extends FileView {
   }
 
   async renderMarkdownPass() {
-    const divs = Array.from(this.svg.querySelectorAll(".fp-md")) as HTMLElement[];
-    if (divs.length === 0) return;
     const token = ++this.mdPass;
+    const divs = Array.from(this.svg.querySelectorAll(".fp-md")) as HTMLElement[];
+    if (divs.length === 0) {
+      if (this.mdComponent) { this.removeChild(this.mdComponent); this.mdComponent = null; }
+      return;
+    }
     const comp = new Component();
     try { this.addChild(comp); } catch {}
     const source = this.file?.path || "";
@@ -530,11 +553,15 @@ export class FreeplaneView extends FileView {
       const id = div.getAttribute("data-id") || "";
       const n = this.layout?.byId?.[id];
       if (!n) return;
+      const markdown = toMarkdown(div.getAttribute("data-source") ?? n.text);
+      const hasPdf = Array.from(markdown.matchAll(/!\[\[([^\]]+)\]\]/g)).some(match =>
+        this.resolveLinkedFile(match[1])?.extension.toLowerCase() === "pdf" || /\.pdf(?:[#|]|$)/i.test(match[1]));
+      div.classList.toggle("fp-md-pdf", hasPdf);
       div.innerHTML = "";
-      try { await (MarkdownRenderer as any).render(this.app, toMarkdown(div.getAttribute("data-source") ?? n.text), div, source, comp); }
+      try { await (MarkdownRenderer as any).render(this.app, markdown, div, source, comp); }
       catch { div.textContent = n.text; }
     }));
-    if (token !== this.mdPass) return;
+    if (token !== this.mdPass) { this.removeChild(comp); return; }
     const old = this.mdComponent;
     this.mdComponent = comp;
     if (old && old !== comp) { try { this.removeChild(old); } catch {} }
@@ -548,8 +575,11 @@ export class FreeplaneView extends FileView {
     let changed = false;
     for (const div of divs) {
       const id = (div.getAttribute("data-id") || "") + (div.hasAttribute("data-type") ? ":" + div.getAttribute("data-type") : "");
-      const w = Math.max(60, Math.ceil(div.scrollWidth) + 2);
-      const h = Math.max(30, Math.ceil(div.scrollHeight) + 2);
+      // PDF page canvases grow asynchronously. Measure their bounded viewport,
+      // never their internal scroll extent, or every load rebuilds the viewer.
+      const pdf = div.classList.contains("fp-md-pdf");
+      const w = Math.max(60, Math.ceil(pdf ? div.offsetWidth : div.scrollWidth) + 2);
+      const h = Math.max(30, Math.ceil(pdf ? div.offsetHeight : div.scrollHeight) + 2);
       const used = this.mdSizes[id];
       if (!used || Math.abs(used.w - w) > 2 || Math.abs(used.h - h) > 2) { this.mdSizes[id] = { w, h }; changed = true; }
     }
@@ -785,6 +815,34 @@ export class FreeplaneView extends FileView {
     this.canvasEl.scrollLeft = (cx - vb[0]) * this.zoom - this.canvasEl.clientWidth / 2;
     this.canvasEl.scrollTop = (cy - vb[1]) * this.zoom - this.canvasEl.clientHeight / 2;
   }
+  ensureSelectedVisible() {
+    if (!this.selectedId || this.keyboardEditSession) return;
+    const node = this.svg.querySelector('.fp-node[data-id="' + cssEscape(this.selectedId) + '"]');
+    if (!node) return;
+    const box = node.getBoundingClientRect(), canvas = this.canvasEl.getBoundingClientRect();
+    const left = canvas.left + 12, top = canvas.top + 12;
+    const right = canvas.left + this.canvasEl.clientWidth - 12, bottom = canvas.top + this.canvasEl.clientHeight - 12;
+    const dx = box.left < left ? box.left - left : box.right > right ? Math.min(box.left - left, box.right - right) : 0;
+    const dy = box.top < top ? box.top - top : box.bottom > bottom ? Math.min(box.top - top, box.bottom - bottom) : 0;
+    this.canvasEl.scrollLeft += dx;
+    this.canvasEl.scrollTop += dy;
+  }
+
+  toggleSubtree() {
+    if (!this.doc || !this.selectedId) return;
+    const root = nodeById(this.doc, this.selectedId);
+    if (!root) return;
+    const branches = [root, ...Array.from(root.querySelectorAll("node"))].filter(n => this.nodeChildren(n).length);
+    if (!branches.length) return;
+    const collapse = branches.some(n => n.getAttribute("FOLDED") !== "true");
+    const before = serializeDoc(this.doc);
+    for (const n of branches) {
+      if (collapse) n.setAttribute("FOLDED", "true");
+      else n.removeAttribute("FOLDED");
+    }
+    this.selectOnly(this.selectedId);
+    this.commit(before);
+  }
   applyZoom() {
     if (!this.svg || !this.layout) return;
     this.svg.setAttribute("width", String(Math.round(this.layout.width * this.zoom)));
@@ -843,6 +901,22 @@ export class FreeplaneView extends FileView {
     menu.addItem((it) => it.setTitle("Open").onClick(() => this.openLink(href, false)));
     menu.addItem((it) => it.setTitle("Open in new tab").onClick(() => this.openLink(href, true)));
     menu.addItem((it) => it.setTitle("Open with default app").onClick(() => this.openLinkDefault(href)));
+    menu.addItem(it => it.setTitle("Show in navigation").setIcon("folder").onClick(async () => {
+      const file = this.resolveLinkedFile(href);
+      if (!file) { new Notice("Linked file not found."); return; }
+      const leaf = this.app.workspace.getLeavesOfType("file-explorer")[0];
+      if (!leaf) { new Notice("File navigation is not available."); return; }
+      await this.app.workspace.revealLeaf(leaf);
+      (leaf.view as any).revealInFolder?.(file);
+    }));
+    menu.addItem(it => it.setTitle("Show in system explorer").setIcon("folder-open").onClick(() => {
+      const file = this.resolveLinkedFile(href);
+      const adapter = this.app.vault.adapter as any;
+      const shell = (window as any).require?.("electron")?.shell;
+      if (!file) { new Notice("Linked file not found."); return; }
+      if (!shell?.showItemInFolder || !adapter.getFullPath) { new Notice("System explorer is available on desktop only."); return; }
+      shell.showItemInFolder(adapter.getFullPath(file.path));
+    }));
     menu.addItem((it) => it.setTitle("Rename").onClick(() => {
       const file = this.resolveLinkedFile(href);
       if (file) new RenameFile(this.app, file).open();
@@ -915,6 +989,7 @@ export class FreeplaneView extends FileView {
     }
     this.renderMarkdownPass();
     this.renderSidebar();
+    this.ensureSelectedVisible();
     (this.leaf as any).updateHeader?.();
   }
 

@@ -8,7 +8,7 @@
  * blocks, and cached Markdown-measured sizes.
  */
 import { childNodeElements, richContentPreviewSource } from "./xml";
-import { needsMarkdown } from "./md";
+import { needsMarkdown, wikiLabel } from "./md";
 import { settings } from "../settings";
 
 const NODE_H = 30;              // single-line title height
@@ -302,7 +302,7 @@ export function layoutMap(
 
 /** Remove lightweight emphasis markers when estimating visible width. */
 function stripInlineMarkdown(text: string): string {
-  return String(text).replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1")
+  return String(text).replace(/!?\[\[([^\]\n]*)\]\]/g, (_, target) => wikiLabel(target)).replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/_([^_]+)_/g, "$1");
 }
 
@@ -349,10 +349,11 @@ function wrapText(text: string, width: number): string[] {
     const append = (word: string, prefix = "", suffix = "", atomic = false) => {
       if (!word) return;
       if (atomic) {
+        const length = wikiLabel(word).length;
         const sep = pendingSpace && visible ? " " : "";
-        if (visible && visible + sep.length + word.length > width) flush();
+        if (visible && visible + sep.length + length > width) flush();
         line += (pendingSpace && visible ? " " : "") + prefix + word + suffix;
-        visible += (pendingSpace && visible ? 1 : 0) + word.length;
+        visible += (pendingSpace && visible ? 1 : 0) + length;
         pendingSpace = false;
         return;
       }

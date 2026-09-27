@@ -342,6 +342,25 @@
   margin: 0;
 }
 
+.fp-md.fp-md-pdf {
+  width: 420px !important;
+  min-width: 420px;
+  max-width: 420px !important;
+  height: 360px;
+  min-height: 360px;
+  max-height: 360px;
+  overflow: auto;
+  contain: size layout;
+}
+.fp-md-pdf .pdf-embed {
+  width: 100%;
+  min-width: 0;
+  height: 340px;
+  min-height: 340px;
+  max-height: 340px;
+  overflow: hidden;
+}
+
 .fp-md .markdown-embed {
   border: none;
   padding: 0;

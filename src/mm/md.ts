@@ -15,3 +15,8 @@ export function needsMarkdown(text: string): boolean {
 export function toMarkdown(text: string): string {
   return (text || "").replace(/^\\latex\s*/, "");
 }
+
+export function wikiLabel(target: string): string {
+  const parts = target.split("|");
+  return parts.length > 1 ? parts.slice(1).join("|") : (target.split("/").pop() || target);
+}

@@ -6,6 +6,7 @@
  * [[link]] tspans, and bezier edge paths between parent and child.
  * All interaction is delegated back to the view via `handlers`.
  */
+import { wikiLabel } from "./md";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** Create an element in the SVG namespace with attributes. */
@@ -283,7 +284,7 @@ function appendInlineRuns(parent: SVGTextElement, line: string) {
     const link = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
     if (link) {
       const tspan = svgEl("tspan", { class: "fp-rich-link", "data-href": link[2] });
-      tspan.textContent = link[2];
+      tspan.textContent = wikiLabel(link[2]);
       parent.appendChild(tspan);
       continue;
     }
