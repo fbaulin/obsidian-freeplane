@@ -1,3 +1,4 @@
+import { characterLimitPixels, inlinePixels, wrapPixels } from "./textMetrics";
 import { nodeTextSource } from "./xml";
 /**
  * mm/layout.ts
@@ -84,14 +85,14 @@ export function layoutMap(
         richBlocks.push({
           type: "DETAILS",
           title: "DETAILS",
-          lines: wrapText(details, MAXSYM)
+          lines: wrapPixels(details, characterLimitPixels(MAXSYM), settings.detailsFontSize)
         });
       }
       if (note) {
         richBlocks.push({
           type: "NOTE",
           title: "NOTE",
-          lines: wrapText(note, MAXSYM)
+          lines: wrapPixels(note, characterLimitPixels(MAXSYM), RICH_FONT)
         });
       }
     }
@@ -116,10 +117,9 @@ export function layoutMap(
 
     // Preserve lightweight markup on each wrapped line; the renderer turns it
     // into SVG tspans after layout.
-    const textLines = wrapText(text, MAXSYM);
-    const longestLine = textLines.map(stripInlineMarkdown).reduce(
-      (a, b) => (a.length >= b.length ? a : b), " "
-    );
+    const pixelLimit = characterLimitPixels(MAXSYM);
+    const textLines = wrapPixels(text, pixelLimit, 13, fontBold, fontItalic);
+    const measuredTitleWidth = Math.max(60, ...textLines.map(line => Math.ceil(inlinePixels(line, 13, fontBold, fontItalic)) + 20));
 
     const isMarkdown = needsMarkdown(text);                  // markdown pass?
     const wrapMarkdown = isMarkdown && !/\\latex|!\[\[/.test(text);
@@ -131,12 +131,9 @@ export function layoutMap(
     const titleHeight = textHeight + imageHeight;
     const nodeHeight = titleHeight + richHeight;
     const titleWidth = isMarkdown
-      ? (wrapMarkdown ? estimateWidth(longestLine) : (mdSize ? mdSize.w : 220))
-      : estimateWidth(longestLine);                          // canvas-measured
-    const richLongest = richBlocks.flatMap((b) => b.lines).map(stripInlineMarkdown).reduce(
-      (a: string, b: string) => (a.length >= b.length ? a : b), ""
-    );
-    const richWidth = richExpanded ? Math.max(0, ...richBlocks.map(b => b.size?.w || Math.max(...b.lines.map((line: string) => estimateWidth(stripInlineMarkdown(line)) * b.fontSize / 13)))) : 0;
+      ? (wrapMarkdown ? (mdSize ? mdSize.w : Math.min(pixelLimit + 20, measuredTitleWidth)) : (mdSize ? mdSize.w : 220))
+      : measuredTitleWidth;                          // canvas-measured
+    const richWidth = richExpanded ? Math.max(0, ...richBlocks.map(b => b.size?.w || Math.max(...b.lines.map((line: string) => Math.ceil(inlinePixels(line, b.fontSize)) + 20)))) : 0;
     const imageWidth = imageSize ? imageSize.w * imageScale + 20 : 0;
     const width = Math.max(titleWidth, richWidth, imageWidth, 60);
 
@@ -162,6 +159,7 @@ export function layoutMap(
       textHeight,
       isMarkdown,
       wrapMarkdown,
+      pixelLimit,
       lines: textLines,
       richBlocks,
       hasRich,
@@ -300,94 +298,3 @@ export function layoutMap(
   };
 }
 
-/** Remove lightweight emphasis markers when estimating visible width. */
-function stripInlineMarkdown(text: string): string {
-  return String(text).replace(/!?\[\[([^\]\n]*)\]\]/g, (_, target) => wikiLabel(target)).replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/_([^_]+)_/g, "$1");
-}
-
-let measureCtx: CanvasRenderingContext2D | null = null;  // lazy canvas measurer
-let cachedFont = "";                                     // cached font string
-
-/** Cached "13px <theme font family>" string for canvas measurement. */
-function font13(): string {
-  if (!cachedFont) {
-    const fam =
-      (typeof document !== "undefined" && getComputedStyle(document.body).fontFamily) ||
-      "sans-serif";
-    cachedFont = "13px " + fam;
-  }
-  return cachedFont;
-}
-
-/** Measure real rendered text width; add 10px padding on each side. */
-function estimateWidth(text: string): number {
-  const t = text || " ";
-  let w: number;
-  if (!measureCtx) {
-    measureCtx = document.createElement("canvas").getContext("2d");
-  }
-  if (measureCtx) {
-    measureCtx.font = font13();                  // same font as SVG text
-    w = measureCtx.measureText(t).width;         // exact pixel width
-  } else {
-    w = t.length * 7;                            // fallback estimate
-  }
-  // 10px left padding (text x=10) + 10px right padding
-  return Math.max(60, Math.ceil(w) + 20);
-}
-
-/** Word-wrap preview Markdown without cutting bold/italic markers in half. */
-function wrapText(text: string, width: number): string[] {
-  const out: string[] = [];
-  for (const originalLine of String(text).replace(/\r\n/g, "\n").split("\n")) {
-    if (!originalLine) { out.push(""); continue; }
-    const pattern = /(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
-    const parts = originalLine.split(pattern).filter(Boolean);
-    let line = "", visible = 0, pendingSpace = false;
-    const flush = () => { if (line) out.push(line); line = ""; visible = 0; pendingSpace = false; };
-    const append = (word: string, prefix = "", suffix = "", atomic = false) => {
-      if (!word) return;
-      if (atomic) {
-        const length = wikiLabel(word).length;
-        const sep = pendingSpace && visible ? " " : "";
-        if (visible && visible + sep.length + length > width) flush();
-        line += (pendingSpace && visible ? " " : "") + prefix + word + suffix;
-        visible += (pendingSpace && visible ? 1 : 0) + length;
-        pendingSpace = false;
-        return;
-      }
-      let rest = word;
-      while (rest) {
-        const sep = pendingSpace && visible ? 1 : 0;
-        const room = width - visible - sep;
-        if (visible && room <= 0) { flush(); continue; }
-        if (visible && rest.length <= width && rest.length > room) { flush(); continue; }
-        const take = Math.min(rest.length, Math.max(1, room));
-        const piece = rest.slice(0, take);
-        line += (pendingSpace && visible ? " " : "") + prefix + piece + suffix;
-        visible += (pendingSpace && visible ? 1 : 0) + piece.length;
-        pendingSpace = false;
-        rest = rest.slice(take);
-        if (rest) flush();
-      }
-    };
-    for (const part of parts) {
-      const link = /^(!?\[\[)([^\]\n]*)(\]\])$/.exec(part);
-      const both = /^(\*\*\*)([^*\n]+)(\*\*\*)$/.exec(part);
-      const bold = /^(\*\*|__)([^*_\n]+)(\*\*|__)$/.exec(part);
-      const italic = /^(\*|_)([^*_\n]+)(\*|_)$/.exec(part);
-      const match = both || bold || italic;
-      if (link) { append(link[2], link[1], link[3], true); continue; }
-      const source = match ? match[2] : part;
-      const prefix = match ? match[1] : "", suffix = match ? match[3] : "";
-      for (const token of source.split(/(\s+)/)) {
-        if (!token) continue;
-        if (/^\s+$/.test(token)) pendingSpace = true;
-        else append(token, prefix, suffix);
-      }
-    }
-    flush();
-  }
-  return out;
-}

@@ -1,3 +1,4 @@
+import { characterLimitPixels, textPixels } from "./mm/textMetrics";
 import { branchSide } from "./mm/xml";
 import { nodeTextSource } from "./mm/xml";
 import { FileView, TFile, Notice, WorkspaceLeaf, Menu, MarkdownRenderer, Component } from "obsidian";
@@ -1824,12 +1825,7 @@ export class FreeplaneView extends FileView {
     const resizeEdit = () => {
       const fs = 13 * scale;
       input.style.fontSize = fs + "px";
-      const lines = input.value.split("\n");
-      let longest = 0, visual = 0;
-      for (const ln of lines) { longest = Math.max(longest, ln.length); visual += Math.max(1, Math.ceil(ln.length / settings.nodeMaxWidthSymbols)); }
-      const chars = Math.min(Math.max(longest, 8), settings.nodeMaxWidthSymbols);
-      input.style.width = Math.max(chars * fs * 0.55 + 24, box.width) + "px";
-      input.style.height = Math.max(visual * fs * 1.35 + 14, box.height) + "px";
+      this.resizeInlineEditor(input, fs, scale);
     };
     resizeEdit();
     input.addEventListener("input", resizeEdit);
@@ -1843,6 +1839,20 @@ export class FreeplaneView extends FileView {
     this.beginKeyboardEdit(id, input);
     input.focus({ preventScroll: true });
     this.positionEditCaret(input, caret);
+  }
+
+  resizeInlineEditor(input: HTMLTextAreaElement, fs: number, scale: number) {
+    const family = getComputedStyle(input).fontFamily;
+    // Node and details share the same pixel limit; details use their own font size.
+    const limit = characterLimitPixels(settings.nodeMaxWidthSymbols, 13 * scale, family);
+    const longest = Math.max(0, ...input.value.split("\n").map(line => textPixels(line, fs, false, false, family)));
+    input.style.boxSizing = "border-box";
+    input.style.lineHeight = "1.35";
+    input.style.whiteSpace = "pre-wrap";
+    input.style.overflowWrap = "anywhere";
+    input.style.width = Math.ceil(Math.min(limit, Math.max(40 * scale, longest + 2 * scale)) + 14) + "px";
+    input.style.height = "0px";
+    input.style.height = Math.max(fs * 1.35 + 6, input.scrollHeight + 2) + "px";
   }
 
   positionEditCaret(input: HTMLTextAreaElement, caret: "start" | "end" | "all") {
@@ -1867,10 +1877,12 @@ export class FreeplaneView extends FileView {
     ta.value = richContentSource(el, type);
     ta.style.left = `${box.left - canvasBox.left + this.canvasEl.scrollLeft}px`;
     ta.style.top = `${box.top - canvasBox.top + this.canvasEl.scrollTop}px`;
-    ta.style.width = `${Math.max(n.width, 320)}px`;
-    ta.style.height = `120px`;
+
     ta.style.fontSize = `${(type === "DETAILS" ? settings.detailsFontSize : 12) * this.zoom}px`;
     ta.style.lineHeight = "1.35";
+    const resizeRich = () => this.resizeInlineEditor(ta, (type === "DETAILS" ? settings.detailsFontSize : 12) * this.zoom, this.zoom);
+    resizeRich();
+    ta.addEventListener("input", resizeRich);
     let done = false;
     const commit = () => { if (done) return; done = true; const v = ta.value; this.finishKeyboardEdit(ta); ta.remove(); this.updateRichContent(id, type, v); };
     const cancel = () => { if (done) return; done = true; this.finishKeyboardEdit(ta); ta.remove(); };

@@ -75,8 +75,8 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     div.className = "fp-md";
     if (n.wrapMarkdown) {
       div.classList.add("fp-md-wrap");
-      div.style.width = `${n.width}px`;
-      div.style.maxWidth = `${n.width}px`;
+      div.style.width = "max-content";
+      div.style.maxWidth = `${n.pixelLimit + 20}px`;
       div.style.whiteSpace = "normal";
       div.style.overflowWrap = "anywhere";
     }
@@ -242,6 +242,10 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
       const fo = svgEl("foreignObject", { x: 0, y: y - 10, width: n.width, height: block.size.h, class: "fp-rich-line", "data-id": n.id, "data-type": block.type });
       const div = document.createElement("div");
       div.className = "fp-md";
+      if (!/\\latex|!\[\[/.test(block.markdown)) {
+        div.classList.add("fp-md-wrap");
+        div.style.maxWidth = `${n.pixelLimit + 20}px`;
+      }
       div.setAttribute("data-id", n.id);
       div.setAttribute("data-type", block.type);
       div.setAttribute("data-source", block.markdown);

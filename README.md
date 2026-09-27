@@ -171,3 +171,12 @@ hotkey actions mirror the right side: left goes outward, right goes toward the
 root. From the root, left/right chooses a child on the corresponding side.
 Up/down navigation and movement stay among siblings on the same side. Existing
 edge styles and descendant XML remain intact.
+
+### Pixel-based text layout
+
+Maximum width remains configured in characters. Internally it becomes a pixel
+limit based on a representative Latin/Cyrillic sample in the current font.
+Viewing wraps and measures every line in pixels, including emphasis and link
+labels. Inline node/details editors grow with their raw text up to that limit,
+then wrap and grow vertically; they shrink when text is removed. Source markup
+can occupy more space in editing than its rendered label in viewing.
