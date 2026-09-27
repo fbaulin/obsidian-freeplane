@@ -1,3 +1,4 @@
+import { branchSide } from "./mm/xml";
 import { nodeTextSource } from "./mm/xml";
 import { FileView, TFile, Notice, WorkspaceLeaf, Menu, MarkdownRenderer, Component } from "obsidian";
 import { SnapshotHistory } from "./history";
@@ -306,16 +307,16 @@ export class FreeplaneView extends FileView {
       case "freeplane:fold": if (this.selectedId) this.toggleFold(this.selectedId); break;
       case "freeplane:nav-up": this.selectSiblingNav(-1); break;
       case "freeplane:nav-down": this.selectSiblingNav(1); break;
-      case "freeplane:nav-left": this.selectParentNav(); break;
-      case "freeplane:nav-right": this.selectFirstChildNav(); break;
+      case "freeplane:nav-left": this.navigateHorizontal("left", false); break;
+      case "freeplane:nav-right": this.navigateHorizontal("right", false); break;
       case "freeplane:select-up": this.extendSiblingSelection(-1); break;
       case "freeplane:select-down": this.extendSiblingSelection(1); break;
-      case "freeplane:select-left": this.extendParentSelection(); break;
-      case "freeplane:select-right": this.extendChildSelection(); break;
+      case "freeplane:select-left": this.navigateHorizontal("left", true); break;
+      case "freeplane:select-right": this.navigateHorizontal("right", true); break;
       case "freeplane:move-up": this.moveSelectedSibling(-1); break;
       case "freeplane:move-down": this.moveSelectedSibling(1); break;
-      case "freeplane:promote": this.promoteSelected(); break;
-      case "freeplane:demote": this.demoteSelected(); break;
+      case "freeplane:promote": this.selectedBranchIsLeft() ? this.demoteSelected() : this.promoteSelected(); break;
+      case "freeplane:demote": this.selectedBranchIsLeft() ? this.promoteSelected() : this.demoteSelected(); break;
       case "freeplane:new-sibling-below": this.createSiblingAfterSelected(); break;
       case "freeplane:new-sibling-above": this.createSiblingBeforeSelected(); break;
       case "freeplane:new-child": this.createChildOfSelected(); break;
@@ -1086,9 +1087,37 @@ export class FreeplaneView extends FileView {
     if (!this.doc || !this.selectedId) return;
     const el = nodeById(this.doc, this.selectedId);
     if (!el?.parentElement) return;
-    const sibs = this.nodeChildren(el.parentElement);
+    const sibs = this.navigationSiblings(el);
     const idx = sibs.indexOf(el);
     if (idx >= 0 && sibs.length > 1) this.extendSelectionTo(sibs[(idx + dir + sibs.length) % sibs.length].getAttribute("ID"));
+  }
+  selectedBranchIsLeft(): boolean {
+    const el = this.doc && this.selectedId ? nodeById(this.doc, this.selectedId) : null;
+    return !!el && branchSide(el) === "left";
+  }
+  navigateHorizontal(direction: "left" | "right", extend: boolean) {
+    if (!this.doc || !this.selectedId) return;
+    const el = nodeById(this.doc, this.selectedId);
+    if (!el) return;
+    if (el.parentElement?.nodeName.toLowerCase() === "map") {
+      const children = this.nodeChildren(el).filter(child => branchSide(child) === direction);
+      const preferred = this.preferredChild(el);
+      const child = preferred && children.includes(preferred) ? preferred : children[0];
+      if (!child) return;
+      if (extend) this.extendSelectionTo(child.getAttribute("ID"));
+      else { this.selectedId = child.getAttribute("ID"); this.renderAll(); }
+      return;
+    }
+    const outward = direction === branchSide(el);
+    if (extend) { if (outward) this.extendChildSelection(); else this.extendParentSelection(); }
+    else { if (outward) this.selectFirstChildNav(); else this.selectParentNav(); }
+  }
+  navigationSiblings(el: Element): Element[] {
+    const parent = el.parentElement;
+    if (!parent) return [];
+    const siblings = this.nodeChildren(parent);
+    return parent.parentElement?.nodeName.toLowerCase() === "map"
+      ? siblings.filter(node => branchSide(node) === branchSide(el)) : siblings;
   }
   rememberChild(parent: Element, child: Element) {
     const parentId = parent.getAttribute("ID"), childId = child.getAttribute("ID");
@@ -1126,7 +1155,7 @@ export class FreeplaneView extends FileView {
     if (!this.doc || !this.selectedId) return;
     const el = nodeById(this.doc, this.selectedId);
     if (!el || !el.parentElement) return;
-    const sibs = this.nodeChildren(el.parentElement);
+    const sibs = this.navigationSiblings(el);
     if (sibs.length === 0) return;
     const idx = sibs.indexOf(el);
     const id = sibs[(idx + dir + sibs.length) % sibs.length].getAttribute("ID");
@@ -1427,13 +1456,13 @@ export class FreeplaneView extends FileView {
     if (move) button("Copy", "Copy selected nodes", () => this.copyToSystemClipboard(false));
     else cmd("→+", "New child", "new-child");
     cmd("±", "Fold or unfold", "fold");
-    cmd("←", move ? "Promote selected nodes" : "Select parent", move ? "promote" : "nav-left");
+    cmd("←", move ? "Move selected nodes left" : "Navigate left", move ? "promote" : "nav-left");
     const mode = button(move ? "Move" : "Create", "Toggle one-finger movement mode", () => {
       this.touchMoveMode = !this.touchMoveMode;
       this.renderEditingPanel();
     });
     mode.setAttribute("aria-pressed", String(move));
-    cmd("→", move ? "Demote selected nodes" : "Select child", move ? "demote" : "nav-right");
+    cmd("→", move ? "Move selected nodes right" : "Navigate right", move ? "demote" : "nav-right");
     cmd("⊙", "Center current node", "center-node");
     cmd(move ? "↓*" : "+↓", move ? "Extend selection down" : "New sibling below", move ? "select-down" : "new-sibling-below");
     cmd("↓", move ? "Move nodes down" : "Select next sibling", move ? "move-down" : "nav-down");
@@ -1524,7 +1553,7 @@ export class FreeplaneView extends FileView {
     for (const el of ordered) {
       const parent = el.parentElement;
       if (!parent) continue;
-      const sibs = this.nodeChildren(parent), idx = sibs.indexOf(el);
+      const sibs = this.navigationSiblings(el), idx = sibs.indexOf(el);
       if (idx < 0 || sibs.length < 2) continue;
       if (dir < 0) {
         if (idx === 0) parent.insertBefore(el, this.nextNodeSibling(sibs[sibs.length - 1]));
@@ -1549,9 +1578,15 @@ export class FreeplaneView extends FileView {
       const parent = el.parentElement;
       if (!parent || parent.nodeName.toLowerCase() !== "node") continue;
       const grand = parent.parentElement;
-      if (!grand || grand.nodeName.toLowerCase() === "map") continue;
-      grand.insertBefore(el, this.nextNodeSibling(parent));
-      el.removeAttribute("POSITION");
+      if (!grand) continue;
+      const side = branchSide(el);
+      if (grand.nodeName.toLowerCase() === "map") {
+        el.setAttribute("POSITION", side === "left" ? "right" : "left");
+      } else {
+        grand.insertBefore(el, this.nextNodeSibling(parent));
+        if (grand.parentElement?.nodeName.toLowerCase() === "map") el.setAttribute("POSITION", side);
+        else el.removeAttribute("POSITION");
+      }
       changed = true;
     }
     if (changed) this.commit(before);
@@ -1563,8 +1598,9 @@ export class FreeplaneView extends FileView {
     const before = serializeDoc(this.doc);
     let changed = false;
     for (const el of nodes) {
-      const prev = this.prevNodeSibling(el);
-      if (!prev) continue;
+      const siblings = this.navigationSiblings(el);
+      const prev = siblings[siblings.indexOf(el) - 1];
+      if (!prev || nodes.includes(prev)) continue;
       prev.appendChild(el);
       prev.removeAttribute("FOLDED");
       el.removeAttribute("POSITION");

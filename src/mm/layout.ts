@@ -3,7 +3,7 @@ import { nodeTextSource } from "./xml";
  * mm/layout.ts
  * Semantic Freeplane-style tree layout: no coordinates are stored in the
  * file, everything is computed here. The root sits at (0,0); top-level
- * branches go left/right by POSITION (balanced when missing); each subtree
+ * branches go left/right by POSITION (right when missing); each subtree
  * is stacked vertically around its parent's center.
  * Also computes node sizes: wrapped multiline TEXT, DETAILS/NOTE preview
  * blocks, and cached Markdown-measured sizes.
@@ -188,7 +188,7 @@ export function layoutMap(
   root.x = -root.width / 2;                       // center root at origin
   root.y = -root.height / 2;
 
-  // split top-level branches by POSITION (balance sides when missing)
+  // split top-level branches by POSITION (default to right when missing)
   const topEls = root.folded ? [] : childNodeElements(rootEl);
   const rightEls: Element[] = [];
   const leftEls: Element[] = [];
@@ -199,8 +199,7 @@ export function layoutMap(
     } else if (pos === "right") {
       rightEls.push(el);
     } else {
-      if (rightEls.length <= leftEls.length) rightEls.push(el); // keep balanced
-      else leftEls.push(el);
+      rightEls.push(el);
     }
   });
 

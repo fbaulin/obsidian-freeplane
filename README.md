@@ -160,3 +160,14 @@ The core Outgoing links pane now displays a map-specific list for `.mm` files,
 including embeds, unresolved links and occurrence counts. Click opens a target;
 Ctrl/Cmd-click or middle-click opens it in a new tab. Other files retain the
 normal core pane. This adapter lists saved content, like the map link index.
+
+### Branch sides
+
+Branches without `POSITION` default to the right, without automatic balancing.
+Promoting a child of the root switches its side and saves `POSITION="left"` or
+`POSITION="right"` on that branch. Promoting deeper nodes preserves their side.
+On left branches, horizontal navigation, Shift-selection, and promote/demote
+hotkey actions mirror the right side: left goes outward, right goes toward the
+root. From the root, left/right chooses a child on the corresponding side.
+Up/down navigation and movement stay among siblings on the same side. Existing
+edge styles and descendant XML remain intact.

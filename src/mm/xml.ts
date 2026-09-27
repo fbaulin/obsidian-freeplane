@@ -399,3 +399,13 @@ function escapeXml(s: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 }
+
+/** Descendants inherit the root branch side; missing POSITION always means right. */
+export function branchSide(node: Element): "left" | "right" {
+  let branch = node;
+  while (branch.parentElement?.parentElement?.nodeName.toLowerCase() !== "map") {
+    if (branch.parentElement?.nodeName.toLowerCase() !== "node") return "right";
+    branch = branch.parentElement;
+  }
+  return branch.getAttribute("POSITION") === "left" ? "left" : "right";
+}
