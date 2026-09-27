@@ -1,3 +1,4 @@
+import { nodeTextSource } from "./xml";
 /**
  * mm/layout.ts
  * Semantic Freeplane-style tree layout: no coordinates are stored in the
@@ -61,7 +62,7 @@ export function layoutMap(
     const visibleChildren = includeChildren && !folded ? actualChildren : [];
 
     const id = el.getAttribute("ID") || "";
-    const text = el.getAttribute("TEXT") || "";
+    const text = nodeTextSource(el) || "";
     const fontEl = Array.from(el.children).find((c) => c.nodeName.toLowerCase() === "font");
     const fontBold = fontEl?.getAttribute("BOLD") === "true";
     const fontItalic = fontEl?.getAttribute("ITALIC") === "true";

@@ -1,3 +1,4 @@
+import { needsRichStorage } from "./richMarkdown";
 /**
  * mm/md.ts
  * Detection/conversion helpers for the Markdown rendering pass.
@@ -8,7 +9,7 @@
 
 /** True when the node text needs the Markdown/MathJax rendering pass. */
 export function needsMarkdown(text: string): boolean {
-  return /\\latex|!\[\[|\$[^$]+\$|\]\(#fp-node:/.test(text || "");
+  return needsRichStorage(text || "") || /\\latex|!\[\[|\$[^$]+\$|\]\(#fp-node:/.test(text || "");
 }
 
 /** Hide Freeplane's rendering marker; existing $/$$ delimiters set math mode. */

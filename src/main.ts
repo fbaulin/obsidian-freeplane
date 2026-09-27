@@ -1,3 +1,5 @@
+import { installMapOutgoingLinks } from "./outgoingLinks";
+import { installLinkIndex } from "./linkIndex";
 import { Plugin, TFolder, TFile, Notice, PluginSettingTab, Setting } from "obsidian";
 import { renamedLinks } from "./renameLinks";
 import { installSearchIndex } from "./searchIndex";
@@ -34,6 +36,8 @@ export default class FreeplanePlugin extends Plugin {
     await this.loadConfigFiles();
     this.addSettingTab(new FreeplaneSettingsTab(this));
     await this.cleanupRecovery();
+    installLinkIndex(this);
+    installMapOutgoingLinks(this);
     installSearchIndex(this);
 
     this.registerEvent(

@@ -453,3 +453,16 @@
   gap: 4px;
   margin-bottom: 8px;
 }
+
+/* Markdown tables stay within the measured rich-content area. */
+.fp-md table { border-collapse: collapse; max-width: 100%; }
+.fp-md th, .fp-md td { white-space: normal; overflow-wrap: anywhere; padding: 4px 7px; border: 1px solid var(--background-modifier-border); }
+.fp-md del, .fp-md s, .fp-md strike { text-decoration: line-through; }
+
+/* Only replace the contents of the core outgoing pane while it shows a map. */
+.fp-outgoing-map > :not(.fp-outgoing-list) { display: none !important; }
+.fp-outgoing-list { padding: 8px 12px; }
+.fp-outgoing-title { font-weight: var(--font-semibold); margin-bottom: 10px; }
+.fp-outgoing-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; }
+.fp-outgoing-row a { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.fp-outgoing-count, .fp-outgoing-empty { color: var(--text-muted); font-size: var(--font-smallest); }

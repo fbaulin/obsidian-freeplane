@@ -1,3 +1,4 @@
+import { nodeTextSource } from "./mm/xml";
 import { FileView, TFile, Notice, WorkspaceLeaf, Menu, MarkdownRenderer, Component } from "obsidian";
 import { SnapshotHistory } from "./history";
 import { parseMm, serializeDoc, serializeMm, serializeNodeClipboard, parseNodeClipboard, nodeById, setText, toggleFolded, richContentSource, setRichContent, moveNode } from "./mm/xml";
@@ -1045,7 +1046,7 @@ export class FreeplaneView extends FileView {
     const textInput = this.sidebarEl.createEl("textarea") as HTMLTextAreaElement;
     textInput.rows = 3;
     this.attachSuggest(textInput);
-    textInput.value = el.getAttribute("TEXT") || "";
+    textInput.value = nodeTextSource(el) || "";
     this.sidebarEl.createEl("label", { text: "DETAILS richcontent" });
     const details = this.sidebarEl.createEl("textarea");
     details.style.fontSize = `${settings.detailsFontSize}px`;
@@ -1203,7 +1204,7 @@ export class FreeplaneView extends FileView {
   clipboardOutline(): string {
     const lines: string[] = [];
     const visit = (el: Element, depth: number) => {
-      let text = (el.getAttribute("TEXT") || "").replace(/[\r\n\t]+/g, " ");
+      let text = (nodeTextSource(el) || "").replace(/[\r\n\t]+/g, " ");
       if (/^\\latex\s*/.test(text)) text = text.replace(/^\\latex\s*/, "");
       else {
         const font = Array.from(el.children).find((c) => c.nodeName.toLowerCase() === "font");
@@ -1261,7 +1262,7 @@ export class FreeplaneView extends FileView {
       target.dispatchEvent(new Event("input", { bubbles: true }));
     } else {
       const el = nodeById(doc, id);
-      if (el) this.updateNodeText(id, [el.getAttribute("TEXT"), ...links].filter(Boolean).join("\n"));
+      if (el) this.updateNodeText(id, [nodeTextSource(el), ...links].filter(Boolean).join("\n"));
     }
   }
   copyToSystemClipboard(cut: boolean) {
@@ -1495,7 +1496,7 @@ export class FreeplaneView extends FileView {
     if (!this.doc) return null;
     const el = this.doc.createElement("node");
     const now = String(Date.now());
-    if (text) el.setAttribute("TEXT", text);
+    if (text) setText(el, text);
     el.setAttribute("ID", this.generateNodeId());
     el.setAttribute("CREATED", now);
     el.setAttribute("MODIFIED", now);
@@ -1620,7 +1621,7 @@ export class FreeplaneView extends FileView {
     if (!this.doc) return;
     const el = nodeById(this.doc, id);
     if (!el) return;
-    if ((el.getAttribute("TEXT") || "") === text) return;
+    if ((nodeTextSource(el) || "") === text) return;
     const before = serializeDoc(this.doc);
     setText(el, text);
     delete this.mdSizes[id];
@@ -2010,7 +2011,7 @@ export class FreeplaneView extends FileView {
     const query = this.searchQuery.trim().toLocaleLowerCase();
     if (!query || !this.doc) { if (this.searchCount) this.searchCount.textContent = "0/0"; return; }
     const hits = Array.from(this.doc.querySelectorAll("node")).filter(el =>
-      [el.getAttribute("TEXT"), richContentSource(el, "DETAILS"), richContentSource(el, "NOTE")].join("\n").toLocaleLowerCase().includes(query));
+      [nodeTextSource(el), richContentSource(el, "DETAILS"), richContentSource(el, "NOTE")].join("\n").toLocaleLowerCase().includes(query));
     if (!hits.length) { if (this.searchCount) this.searchCount.textContent = "0/0"; return; }
     const current = hits.findIndex(el => el.getAttribute("ID") === this.selectedId);
     const index = first || current < 0 ? (direction > 0 ? 0 : hits.length - 1) : (current + direction + hits.length) % hits.length;
@@ -2078,7 +2079,7 @@ class LinkSuggest {
   buildList() {
     const q = this.query.toLowerCase();
     if (this.nodeMode) {
-      this.items = Array.from(this.view.doc?.querySelectorAll("node") || []).map((el: any) => ({ nodeId: el.getAttribute("ID"), name: el.getAttribute("TEXT") || "Untitled node" }))
+      this.items = Array.from(this.view.doc?.querySelectorAll("node") || []).map((el: any) => ({ nodeId: el.getAttribute("ID"), name: nodeTextSource(el) || "Untitled node" }))
         .filter((item: any) => item.nodeId && item.name.toLowerCase().includes(q)).slice(0, 8);
       this.index = 0; return;
     }

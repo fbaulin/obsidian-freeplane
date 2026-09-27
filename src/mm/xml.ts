@@ -1,3 +1,4 @@
+import { markdownHtml, needsRichStorage, htmlMarkdown } from "./richMarkdown";
 /**
  * mm/xml.ts
  * XML safety layer. Parses `.mm` files (repairing HTML named entities that
@@ -120,11 +121,21 @@ export function nodeById(doc: Document, id: string): Element | null {
 
 /** Set node TEXT; empty string removes the attribute (Freeplane tolerates it). */
 export function setText(nodeEl: Element, text: string) {
+  if (needsRichStorage(text)) {
+    setRichContent(nodeEl.ownerDocument, nodeEl, "NODE", text);
+    nodeEl.removeAttribute("TEXT");
+    return;
+  }
+  findRichcontent(nodeEl, "NODE")?.remove();
   if (text === "") {
     nodeEl.removeAttribute("TEXT");
   } else {
     nodeEl.setAttribute("TEXT", text);
   }
+}
+
+export function nodeTextSource(node: Element): string {
+  return findRichcontent(node, "NODE") ? richContentSource(node, "NODE") : node.getAttribute("TEXT") || "";
 }
 
 /** Toggle FOLDED="true" (unfold removes the attribute). False if no children. */
@@ -164,6 +175,9 @@ export function richContentSource(nodeEl: Element, type: string): string {
 
   // UX: body with only text-only <p> elements -> show plain lines
   const body = rc.getElementsByTagName("body")[0];
+  if (body && !body.querySelector("[rowspan], [colspan]") && Array.from(body.querySelectorAll("*")).every(el => /^(p|div|br|table|thead|tbody|tfoot|tr|th|td|b|strong|i|em|s|strike|del)$/i.test(el.tagName))) {
+    return htmlMarkdown(body);
+  }
   if (body) {
     const kids = Array.from(body.children);
     if (kids.length > 0 && kids.every((k) => k.nodeName.toLowerCase() === "p" && k.children.length === 0)) {
@@ -182,19 +196,7 @@ export function richContentPreviewSource(nodeEl: Element, type: string): string 
   const rc = findRichcontent(nodeEl, type);
   if (!rc) return "";
   const body = rc.getElementsByTagName("body")[0] || rc;
-  const walk = (node: Node): string => {
-    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || "";
-    if (node.nodeType !== Node.ELEMENT_NODE) return "";
-    const el = node as Element;
-    const tag = el.nodeName.toLowerCase();
-    const inner = Array.from(el.childNodes).map(walk).join("");
-    if (tag === "b" || tag === "strong") return "**" + inner + "**";
-    if (tag === "i" || tag === "em") return "*" + inner + "*";
-    if (tag === "br") return "\n";
-    if (tag === "p" || tag === "div") return inner + "\n";
-    return inner;
-  };
-  return Array.from(body.childNodes).map(walk).join("").replace(/\n+$/, "");
+  return htmlMarkdown(body);
 }
 
 /**
@@ -254,11 +256,7 @@ function parseRichContentFragment(type: string, source: string): Element {
 
   // Convenience: plain text becomes a simple XHTML paragraph per line.
   if (!xml.startsWith("<")) {
-    const paras = xml
-      .split("\n")
-      .map((line) => `<p>${escapeXml(line)}</p>`)
-      .join("");
-    xml = `<html><head></head><body>${paras}</body></html>`;
+    xml = markdownHtml(xml);
   }
 
   let fragDoc: Document;

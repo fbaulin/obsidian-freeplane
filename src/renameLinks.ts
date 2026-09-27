@@ -21,7 +21,7 @@ export function renamedLinks(app: App, xml: string, source: string, oldPath: str
     if (oldPath.endsWith(".md")) candidates.push(oldPath.slice(0, -3), oldPath.split("/").pop()!.slice(0, -3));
     if (!candidates.includes(decoded) && relative !== oldPath && relative + ".md" !== oldPath) return whole;
     changed = true;
-    return "[[" + file.path + (split < 0 ? "" : inner.slice(split)) + "]]";
+    return "[[" + app.metadataCache.fileToLinktext(file, source, !decoded.toLowerCase().endsWith(".md")) + (split < 0 ? "" : inner.slice(split)) + "]]";
   });
   for (const el of Array.from(doc.querySelectorAll("*"))) {
     for (const attr of Array.from(el.attributes)) { const value = replace(attr.value); if (value !== attr.value) el.setAttribute(attr.name, value); }

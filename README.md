@@ -138,3 +138,25 @@ Copy `main.js`, `manifest.json`, `styles.css` into
 - Node backgrounds and text follow Obsidian's light/dark theme.
 - Tab-close cannot be reliably intercepted by plugins; use the
   "Close current Freeplane map" command for the Save/Discard/Cancel prompt.
+
+### Tables, strikethrough and vault links
+
+Node text and details accept Markdown tables and `~~strikethrough~~`. These are
+stored as XHTML tables and `<strike>` elements in Freeplane richcontent and
+converted back to Markdown for editing. Use Shift+Enter for a new line in the
+inline node editor. Existing complex HTML with merged cells remains editable as
+HTML to avoid losing its structure.
+
+Saved maps contribute wikilinks and embeds to Obsidian's metadata link index.
+The index is rebuilt on plugin load and refreshed after saves and vault file
+changes. Native backlink UI behavior needs validation in Obsidian. Renaming a
+file uses the shortest unambiguous link; a folder is retained only when needed
+to distinguish identically named files.
+
+This release restores the original adaptive editor width constants (0.55 and
+24). Install `main.js`, `styles.css`, and `manifest.json`, then reload the plugin.
+
+The core Outgoing links pane now displays a map-specific list for `.mm` files,
+including embeds, unresolved links and occurrence counts. Click opens a target;
+Ctrl/Cmd-click or middle-click opens it in a new tab. Other files retain the
+normal core pane. This adapter lists saved content, like the map link index.

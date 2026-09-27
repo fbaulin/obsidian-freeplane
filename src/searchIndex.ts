@@ -1,3 +1,4 @@
+import { nodeTextSource } from "./mm/xml";
 import { Plugin, TFile, Notice, MarkdownView, WorkspaceLeaf } from "obsidian";
 import { parseMm, richContentSource } from "./mm/xml";
 import { FreeplaneView, VIEW_TYPE_FREEPLANE } from "./FreeplaneView";
@@ -44,7 +45,7 @@ export function installSearchIndex(plugin: Plugin) {
       const id = node.getAttribute("ID");
       if (!id) continue;
       const url = `obsidian://freeplane-node?vault=${encodeURIComponent(app.vault.getName())}&file=${encodeURIComponent(file.path)}&node=${encodeURIComponent(id)}`;
-      const contents = [node.getAttribute("TEXT") || "Untitled node", richContentSource(node, "DETAILS"), richContentSource(node, "NOTE")];
+      const contents = [nodeTextSource(node) || "Untitled node", richContentSource(node, "DETAILS"), richContentSource(node, "NOTE")];
       rows.push(`## ${id}`);
       for (const content of contents) for (const line of content.split(/\r?\n/).filter(Boolean)) {
         const label = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([\\[\]*_`])/g, "\\$1");
