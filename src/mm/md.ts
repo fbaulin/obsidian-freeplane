@@ -9,7 +9,7 @@ import { needsRichStorage } from "./richMarkdown";
 
 /** True when the node text needs the Markdown/MathJax rendering pass. */
 export function needsMarkdown(text: string): boolean {
-  return needsRichStorage(text || "") || /\\latex|!\[\[|\$[^$]+\$|\]\(#fp-node:/.test(text || "");
+  return /`/.test(text || "") || needsRichStorage(text || "") || /\\latex|!\[\[|\$[^$]+\$|\]\(#fp-node:/.test(text || "");
 }
 
 /** Hide Freeplane's rendering marker; existing $/$$ delimiters set math mode. */

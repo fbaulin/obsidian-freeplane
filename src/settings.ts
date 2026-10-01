@@ -1,5 +1,6 @@
 export interface FpSettings {
   nodeMaxWidthSymbols: number;
+  nodeMaxHeightLines: number;
   touchpadPanSpeed: number;
   touchpadZoomSpeed: number;
   touchscreenPanSpeed: number;
@@ -9,6 +10,7 @@ export interface FpSettings {
 }
 export const DEFAULT_SETTINGS: FpSettings = {
   nodeMaxWidthSymbols: 50,
+  nodeMaxHeightLines: 20,
   touchpadPanSpeed: 1,
   touchpadZoomSpeed: 1,
   touchscreenPanSpeed: 1,
@@ -19,6 +21,7 @@ export const DEFAULT_SETTINGS: FpSettings = {
 export const settings: FpSettings = { ...DEFAULT_SETTINGS };
 export const SETTING_FIELDS: { key: keyof FpSettings; name: string; min: number; max: number; step: number; desc: string }[] = [
   { key: "nodeMaxWidthSymbols", name: "Node wrap width", min: 8, max: 300, step: 1, desc: "Maximum characters per wrapped line." },
+  { key: "nodeMaxHeightLines", name: "Maximum node height", min: 3, max: 200, step: 1, desc: "Visible height in lines; longer nodes scroll. Default: 20." },
   { key: "detailsFontSize", name: "Details font size", min: 6, max: 32, step: 0.5, desc: "Pixels at 100% zoom, for viewing and editing. Node text is 13 px." },
   { key: "editingPanelButtonSize", name: "Editing panel button size", min: 16, max: 96, step: 1, desc: "Button width and height in pixels." },
   ...(["touchpad", "touchscreen"] as const).flatMap(device => (["Pan", "Zoom"] as const).map(action => ({

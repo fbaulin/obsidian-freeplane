@@ -175,7 +175,7 @@ export function richContentSource(nodeEl: Element, type: string): string {
 
   // UX: body with only text-only <p> elements -> show plain lines
   const body = rc.getElementsByTagName("body")[0];
-  if (body && !body.querySelector("[rowspan], [colspan]") && Array.from(body.querySelectorAll("*")).every(el => /^(p|div|br|table|thead|tbody|tfoot|tr|th|td|b|strong|i|em|s|strike|del)$/i.test(el.tagName))) {
+  if (body && !body.querySelector("[rowspan], [colspan]") && Array.from(body.querySelectorAll("*")).every(el => /^(p|div|br|pre|code|table|thead|tbody|tfoot|tr|th|td|b|strong|i|em|s|strike|del)$/i.test(el.tagName))) {
     return htmlMarkdown(body);
   }
   if (body) {

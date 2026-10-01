@@ -1,3 +1,4 @@
+import { inlinePattern } from "./textMetrics";
 /**
  * mm/render.ts
  * SVG DOM builder. Turns the layout tree into <g> node groups (rect +
@@ -23,6 +24,7 @@ export function renderMap(
   selectedIds: Set<string>,
   handlers: any
 ) {
+  const scrollPositions = new Map(Array.from(svg.querySelectorAll<HTMLElement>('.fp-node-scroll')).map(el => [el.dataset.nodeId!, el.scrollTop]));
   svg.innerHTML = "";                              // full redraw each pass
 
   if (!layout || !layout.rootId) {                 // nothing to draw
@@ -44,6 +46,9 @@ export function renderMap(
   }
   for (const node of layout.nodes) {
     nodeLayer.appendChild(renderNode(node, selectedIds, handlers));
+  }
+  for (const el of Array.from(svg.querySelectorAll<HTMLElement>('.fp-node-scroll'))) {
+    el.scrollTop = scrollPositions.get(el.dataset.nodeId!) || 0;
   }
 }
 
@@ -118,8 +123,8 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
 
   if (n.hasRich) {
     // left circle: show/hide DETAILS+NOTE preview (writes HIDDEN attr)
-    const richCircle = svgEl("circle", { class: "fp-rich-toggle", cx: -10, cy: n.titleHeight / 2, r: 7 });
-    const richSign = svgEl("text", { class: "fp-rich-sign", x: -10, y: n.titleHeight / 2 + 4, "text-anchor": "middle" });
+    const richCircle = svgEl("circle", { class: "fp-rich-toggle", cx: -10, cy: Math.min(n.titleHeight, n.height) / 2, r: 7 });
+    const richSign = svgEl("text", { class: "fp-rich-sign", x: -10, y: Math.min(n.titleHeight, n.height) / 2 + 4, "text-anchor": "middle" });
     richSign.textContent = n.richExpanded ? "↑" : "↓";
     richCircle.addEventListener("click", (e: MouseEvent) => { e.stopPropagation(); handlers.toggleRich(n.id); });
     g.appendChild(richCircle);
@@ -128,7 +133,7 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
 
   if (n.richExpanded && (n.hasDetails || n.hasNote)) {
     // left "→" circles: open the inline editor for DETAILS / NOTE
-    let ey = n.titleHeight / 2 + 18;
+    let ey = Math.min(n.titleHeight, n.height) / 2 + 18;
     const types: Array<"DETAILS" | "NOTE"> = [];
     if (n.hasDetails) types.push("DETAILS");
     if (n.hasNote) types.push("NOTE");
@@ -146,8 +151,8 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
   if (n.hasChildren) {
     // right circle: fold/unfold this node's children
     const foldX = n.width + 10;
-    const fold = svgEl("circle", { class: "fp-fold", cx: foldX, cy: n.titleHeight / 2, r: 7 });
-    const sign = svgEl("text", { class: "fp-fold-sign", x: foldX, y: n.titleHeight / 2 + 3, "text-anchor": "middle" });
+    const fold = svgEl("circle", { class: "fp-fold", cx: foldX, cy: Math.min(n.titleHeight, n.height) / 2, r: 7 });
+    const sign = svgEl("text", { class: "fp-fold-sign", x: foldX, y: Math.min(n.titleHeight, n.height) / 2 + 3, "text-anchor": "middle" });
     sign.textContent = n.folded ? "+" : "-";
     fold.addEventListener("click", (e: MouseEvent) => { e.stopPropagation(); handlers.toggleFold(n.id); });
     g.appendChild(fold);
@@ -156,6 +161,42 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
 
   if (n.richExpanded && n.richBlocks?.length) {
     renderRichBlocks(g, n, handlers);              // DETAILS/NOTE preview
+  }
+
+  if (n.scrollable) {
+    const viewport = svgEl('foreignObject', { x: 0, y: 0, width: n.width, height: n.height, class: 'fp-scroll-viewport' });
+    const scroller = document.createElement('div');
+    scroller.className = 'fp-node-scroll';
+    scroller.dataset.nodeId = n.id;
+    scroller.style.height = `${n.height}px`;
+    scroller.style.width = `${n.width}px`;
+    const content = svgEl('svg', { width: n.width - 16, height: n.contentHeight, class: 'fp-node-scroll-content' });
+    // Only the content scrolls. Borders and the external fold/edit controls stay put.
+    for (const child of Array.from(g.children) as Element[]) {
+      if (child === rect || child.matches('.fp-fold, .fp-fold-sign, .fp-rich-toggle, .fp-rich-sign, .fp-rich-edit, .fp-rich-edit-sign')) continue;
+      content.appendChild(child);
+    }
+    scroller.appendChild(content); viewport.appendChild(scroller); g.appendChild(viewport);
+    scroller.addEventListener('wheel', event => { if (!event.ctrlKey && !event.metaKey) event.stopPropagation(); });
+    scroller.addEventListener('pointerdown', event => { if (event.pointerType === 'touch' || event.target === scroller) event.stopPropagation(); });
+    // The canvas disables native touch panning, so scroll single-finger drags here.
+    let lastTouchY: number | null = null;
+    scroller.addEventListener('touchstart', event => {
+      lastTouchY = event.touches.length === 1 ? event.touches[0].clientY : null;
+      if (lastTouchY !== null) event.stopPropagation();
+    }, { passive: true });
+    scroller.addEventListener('touchmove', event => {
+      if (event.touches.length !== 1 || lastTouchY === null) { lastTouchY = null; return; }
+      event.preventDefault(); event.stopPropagation();
+      const scale = scroller.getBoundingClientRect().height / n.height || 1;
+      scroller.scrollTop += (lastTouchY - event.touches[0].clientY) / scale;
+      lastTouchY = event.touches[0].clientY;
+    }, { passive: false });
+    scroller.addEventListener('touchend', event => {
+      if (lastTouchY !== null) event.stopPropagation();
+      lastTouchY = null;
+    }, { passive: true });
+    scroller.addEventListener('touchcancel', () => { lastTouchY = null; }, { passive: true });
   }
 
   // click = select (links bubble up to the view instead)
@@ -219,7 +260,7 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
     firstSep = false;
     const lines = block.markdown ? Math.ceil(block.size.h / lineH) : block.lines.length;
     const bottom = block === n.richBlocks[n.richBlocks.length - 1]
-      ? n.height : y + lines * lineH + 4 - 11;
+      ? n.contentHeight : y + lines * lineH + 4 - 11;
     const hit = svgEl("rect", {
       class: "fp-rich-line fp-rich-hit",
       x: 0, y: sepY, width: n.width, height: Math.max(0, bottom - sepY),
@@ -282,12 +323,12 @@ function renderRichBlocks(g: SVGGElement, n: any, handlers: any) {
 
 /** Render lightweight emphasis and wikilinks without an HTML foreignObject. */
 function appendInlineRuns(parent: SVGTextElement, line: string) {
-  const parts = line.split(/(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g);
+  const parts = line.split(inlinePattern);
   for (const part of parts) {
     if (!part) continue;
     const link = /^(!?)\[\[([^\]\n]*)\]\]$/.exec(part);
     if (link) {
-      const tspan = svgEl("tspan", { class: "fp-rich-link", "data-href": link[2] });
+      const tspan = svgEl("tspan", { class: "fp-rich-link", "data-href": link[2].split("|")[0] });
       tspan.textContent = wikiLabel(link[2]);
       parent.appendChild(tspan);
       continue;
@@ -304,8 +345,8 @@ function appendInlineRuns(parent: SVGTextElement, line: string) {
 
 /** Bezier connector between parent and child (side-aware). */
 function edgePath(from: any, to: any): string {
-  const fromY = from.y + from.titleHeight / 2;     // vertical center of title
-  const toY = to.y + to.titleHeight / 2;
+  const fromY = from.y + Math.min(from.titleHeight, from.height) / 2;     // vertical center of title
+  const toY = to.y + Math.min(to.titleHeight, to.height) / 2;
 
   if (to.side === "right") {
     const x1 = from.x + from.width;                // parent right edge

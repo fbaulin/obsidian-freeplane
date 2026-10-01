@@ -466,3 +466,16 @@
 .fp-outgoing-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; }
 .fp-outgoing-row a { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .fp-outgoing-count, .fp-outgoing-empty { color: var(--text-muted); font-size: var(--font-smallest); }
+
+.fp-scroll-viewport { overflow: hidden; border-radius: 7px; }
+.fp-node-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  border-radius: 7px;
+}
+.fp-node-scroll-content { display: block; overflow: visible; }
+.fp-md pre { max-width: 100%; white-space: pre; overflow-x: auto; }
+.fp-md code { font-family: var(--font-monospace); }

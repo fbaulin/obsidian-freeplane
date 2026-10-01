@@ -1,6 +1,6 @@
 import { wikiLabel } from './md';
 let context: CanvasRenderingContext2D | null = null;
-export const inlinePattern = /(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+export const inlinePattern = /(!?\[\[[^\]\n]*\]\]|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}_])__(?=\S)[^_\n]+?__(?![\p{L}\p{N}_])|\*[^*\n]+\*|(?<![\p{L}\p{N}_])_(?=\S)[^_\n]+?_(?![\p{L}\p{N}_]))/gu;
 export function textPixels(text: string, size = 13, bold = false, italic = false, family?: string): number {
   context ||= document.createElement('canvas').getContext('2d');
   if (!context) return Array.from(text).length * size * 0.55;

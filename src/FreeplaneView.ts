@@ -1,3 +1,4 @@
+import { toggleEmphasis } from "./editorFormatting";
 import { characterLimitPixels, textPixels } from "./mm/textMetrics";
 import { branchSide } from "./mm/xml";
 import { nodeTextSource } from "./mm/xml";
@@ -119,6 +120,12 @@ export class FreeplaneView extends FileView {
     // ALL hotkeys come from hotkeys.json, dispatched in capture phase
     this.registerDomEvent(window, "keydown", (e: KeyboardEvent) => {
       if (this.app.workspace.activeLeaf !== this.leaf) return;
+      if (e.target instanceof HTMLTextAreaElement && this.contentEl.contains(e.target)
+        && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^[bi]$/i.test(e.key)) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        toggleEmphasis(e.target, e.key.toLowerCase() === "b" ? "**" : "*");
+        return;
+      }
       const action = matchAction(e);
       if (this.isEditableTarget(e.target) && !(action === "freeplane:update-panel" && this.sidebarEl.contains(e.target as Node))) return;
       if (!action) return;
@@ -948,7 +955,11 @@ export class FreeplaneView extends FileView {
   openLink(href: string, newTab: boolean) {
     if (href.startsWith("#fp-node:")) { this.revealNode(href.slice(9)); return; }
     if (/^(https?|mailto):/i.test(href)) { window.open(href, newTab ? "_blank" : "_self"); return; }
-    this.app.workspace.openLinkText(href, this.file?.path || "", newTab ? "tab" : false);
+    // SVG wrapping may split a label into [[target|label]] fragments.
+    // Obsidian expects only the destination, including any heading/page suffix.
+    const target = href.split("|")[0].trim();
+    if (!target) return;
+    this.app.workspace.openLinkText(target, this.file?.path || "", newTab ? "tab" : false);
   }
   resolveLinkedFile(href: string): TFile | null {
     const path = href.split("|")[0].split("#")[0];
@@ -1851,6 +1862,8 @@ export class FreeplaneView extends FileView {
     input.style.whiteSpace = "pre-wrap";
     input.style.overflowWrap = "anywhere";
     input.style.width = Math.ceil(Math.min(limit, Math.max(40 * scale, longest + 2 * scale)) + 14) + "px";
+    input.style.maxHeight = `${(14 + settings.nodeMaxHeightLines * 16) * scale}px`;
+    input.style.overflowY = "auto";
     input.style.height = "0px";
     input.style.height = Math.max(fs * 1.35 + 6, input.scrollHeight + 2) + "px";
   }

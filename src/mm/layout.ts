@@ -129,13 +129,15 @@ export function layoutMap(
       : 14 + textLines.length * 16;                          // 16px per line
     const imageHeight = imageSize ? imageSize.h * imageScale + 12 : 0;
     const titleHeight = textHeight + imageHeight;
-    const nodeHeight = titleHeight + richHeight;
+    const contentHeight = titleHeight + richHeight;
+    const nodeHeight = Math.min(contentHeight, 14 + Math.round(settings.nodeMaxHeightLines) * 16);
+    const scrollable = contentHeight > nodeHeight;
     const titleWidth = isMarkdown
       ? (wrapMarkdown ? (mdSize ? mdSize.w : Math.min(pixelLimit + 20, measuredTitleWidth)) : (mdSize ? mdSize.w : 220))
       : measuredTitleWidth;                          // canvas-measured
     const richWidth = richExpanded ? Math.max(0, ...richBlocks.map(b => b.size?.w || Math.max(...b.lines.map((line: string) => Math.ceil(inlinePixels(line, b.fontSize)) + 20)))) : 0;
     const imageWidth = imageSize ? imageSize.w * imageScale + 20 : 0;
-    const width = Math.max(titleWidth, richWidth, imageWidth, 60);
+    const width = Math.max(titleWidth, richWidth, imageWidth, 60) + (scrollable ? 16 : 0);
 
     const children = visibleChildren.map((child) =>
       build(child, depth + 1, side, true)
@@ -155,6 +157,8 @@ export function layoutMap(
       side,
       width,
       height: nodeHeight,
+      contentHeight,
+      scrollable,
       titleHeight,
       textHeight,
       isMarkdown,

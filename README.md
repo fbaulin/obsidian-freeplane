@@ -180,3 +180,22 @@ Viewing wraps and measures every line in pixels, including emphasis and link
 labels. Inline node/details editors grow with their raw text up to that limit,
 then wrap and grow vertically; they shrink when text is removed. Source markup
 can occupy more space in editing than its rendered label in viewing.
+
+### Formatting and long nodes
+
+- In node, details and notes editors (including the side panel), Ctrl+B toggles
+  bold and Ctrl+I toggles italic around the selection. With no selection, the
+  cursor is placed between the markers. Cmd works on macOS too.
+- Inline backtick code and fenced triple-backtick blocks render as code. Code
+  remains Markdown when editing and is stored as XHTML code/pre content.
+- `nodeMaxHeightLines` defaults to 20 and is available in the settings pane and
+  settings.json. A longer node scrolls internally, including expanded details
+  and notes. The limit uses the pixel equivalent of normal node text lines.
+  Mouse wheel and one-finger drags scroll its content; external fold controls
+  stay visible. Editors also stop growing at the configured height.
+- Underscores inside identifiers or unmatched at word endings stay literal;
+  standalone `_italic_` and `__bold__` remain supported.
+
+Link-opening fix: rendered link labels (including labels split by pixel wrapping)
+are no longer passed to Obsidian as part of the filename. Opening in the current
+or a new tab preserves heading and PDF page references.

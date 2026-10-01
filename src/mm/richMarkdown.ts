@@ -19,13 +19,17 @@ export function tableStart(lines: string[], i: number): boolean {
 }
 export function needsRichStorage(source: string): boolean {
   const lines = source.split("\n");
-  return /~~[^\n]+?~~/.test(source) || lines.some((_, i) => tableStart(lines, i));
+  return /`/.test(source) || /~~[^\n]+?~~/.test(source) || lines.some((_, i) => tableStart(lines, i));
 }
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 function inline(source: string): string {
   // Keep code and link targets intact while converting formatting outside them.
   return source.split(/(`+[^`]*`+|!?\[\[[\s\S]*?\]\])/g).map(part => {
-    if (/^`|^!?\[\[/.test(part)) return escape(part);
+    if (/^`/.test(part)) {
+      const code = /^(`+)([\s\S]*?)\1$/.exec(part);
+      return code ? '<code>' + escape(code[2]) + '</code>' : escape(part);
+    }
+    if (/^!?\[\[/.test(part)) return escape(part);
     return escape(part).replace(/~~(.+?)~~/g, '<strike>$1</strike>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
   }).join("");
@@ -33,6 +37,13 @@ function inline(source: string): string {
 export function markdownHtml(source: string): string {
   const lines = source.split("\n"), blocks: string[] = [];
   for (let i = 0; i < lines.length; i++) {
+    const fence = /^\s*(`{3,})(.*)$/.exec(lines[i]);
+    if (fence) {
+      const code: string[] = [], language = fence[2].trim();
+      while (++i < lines.length && !new RegExp('^\\s*`{' + fence[1].length + ',}\\s*$').test(lines[i])) code.push(lines[i]);
+      blocks.push('<pre><code' + (language ? ' data-language="' + escape(language) + '"' : '') + '>' + escape(code.join('\n')) + '</code></pre>');
+      continue;
+    }
     if (!tableStart(lines, i)) { blocks.push(`<p>${inline(lines[i])}</p>`); continue; }
     const headers = tableCells(lines[i]), separators = tableCells(lines[++i]);
     const align = separators.map(s => s.startsWith(":") ? (s.endsWith(":") ? "center" : "left") : (s.endsWith(":") ? "right" : ""));
@@ -49,6 +60,17 @@ export function htmlMarkdown(body: Element): string {
     if (node.nodeType !== 1) return '';
     const el = node as Element, tag = el.nodeName.toLowerCase();
     const inner = () => Array.from(el.childNodes).map(walk).join('');
+    if (tag === 'pre') {
+      const code = el.querySelector('code') || el;
+      const raw = code.textContent || '';
+      const fence = '`'.repeat(Math.max(3, ...Array.from(raw.matchAll(/`+/g), m => m[0].length + 1)));
+      return fence + (code.getAttribute('data-language') || '') + '\n' + raw + '\n' + fence + '\n';
+    }
+    if (tag === 'code') {
+      const raw = el.textContent || '';
+      const marker = '`'.repeat(Math.max(1, ...Array.from(raw.matchAll(/`+/g), m => m[0].length + 1)));
+      return marker + raw + marker;
+    }
     if (tag === 'table') {
       const rows = Array.from(el.querySelectorAll('tr')).map(row => Array.from(row.children).filter(c => /^(th|td)$/i.test(c.tagName)));
       if (!rows.length) return '';
