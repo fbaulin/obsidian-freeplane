@@ -199,3 +199,22 @@ can occupy more space in editing than its rendered label in viewing.
 Link-opening fix: rendered link labels (including labels split by pixel wrapping)
 are no longer passed to Obsidian as part of the filename. Opening in the current
 or a new tab preserves heading and PDF page references.
+
+### Freeplane compatibility and selection updates
+
+- HTML indentation is ignored when reading rich text; intentional blank paragraphs
+  remain. Spaces and line breaks inside code blocks are preserved.
+- Left branches place the fold button outside on the left and details controls
+  on the right.
+- Rectangle selection updates while dragging. Shrinking the rectangle removes
+  newly selected nodes outside it, retaining the original selection.
+- Details/notes visibility applies to every selected node: hide if any are shown,
+  otherwise show all.
+- Ctrl+B/Ctrl+I use physical key codes, including with a Russian keyboard layout.
+  An empty selection inside a word formats that word.
+- Whole-node Markdown links use Freeplane's LINK attribute; links mixed with text
+  use XHTML anchors. Existing LINK attributes and rich-text anchors are exposed
+  as Markdown links when editing. Local #ID_ node links are recognized.
+
+Run `node tests/regressions.cjs` after installing build dependencies (requires
+Python 3 for the XML parsing fixtures).

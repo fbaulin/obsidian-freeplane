@@ -1,3 +1,4 @@
+import { wholeMarkdownLink, markdownLink } from "./markdownLinks";
 import { markdownHtml, needsRichStorage, htmlMarkdown } from "./richMarkdown";
 /**
  * mm/xml.ts
@@ -121,6 +122,14 @@ export function nodeById(doc: Document, id: string): Element | null {
 
 /** Set node TEXT; empty string removes the attribute (Freeplane tolerates it). */
 export function setText(nodeEl: Element, text: string) {
+  const link = wholeMarkdownLink(text);
+  if (link && !needsRichStorage(link.label) && !/[*_]/.test(link.label)) {
+    findRichcontent(nodeEl, "NODE")?.remove();
+    nodeEl.setAttribute("TEXT", link.label);
+    nodeEl.setAttribute("LINK", link.target.replace(/^#fp-node:/, "#"));
+    return;
+  }
+  nodeEl.removeAttribute("LINK");
   if (needsRichStorage(text)) {
     setRichContent(nodeEl.ownerDocument, nodeEl, "NODE", text);
     nodeEl.removeAttribute("TEXT");
@@ -135,7 +144,9 @@ export function setText(nodeEl: Element, text: string) {
 }
 
 export function nodeTextSource(node: Element): string {
-  return findRichcontent(node, "NODE") ? richContentSource(node, "NODE") : node.getAttribute("TEXT") || "";
+  const text = findRichcontent(node, "NODE") ? richContentSource(node, "NODE") : node.getAttribute("TEXT") || "";
+  const link = node.getAttribute("LINK");
+  return link ? markdownLink(text || link, link) : text;
 }
 
 /** Toggle FOLDED="true" (unfold removes the attribute). False if no children. */
@@ -175,7 +186,7 @@ export function richContentSource(nodeEl: Element, type: string): string {
 
   // UX: body with only text-only <p> elements -> show plain lines
   const body = rc.getElementsByTagName("body")[0];
-  if (body && !body.querySelector("[rowspan], [colspan]") && Array.from(body.querySelectorAll("*")).every(el => /^(p|div|br|pre|code|table|thead|tbody|tfoot|tr|th|td|b|strong|i|em|s|strike|del)$/i.test(el.tagName))) {
+  if (body && !body.querySelector("[rowspan], [colspan]") && Array.from(body.querySelectorAll("*")).every(el => /^(p|div|br|pre|code|a|table|thead|tbody|tfoot|tr|th|td|b|strong|i|em|s|strike|del)$/i.test(el.tagName))) {
     return htmlMarkdown(body);
   }
   if (body) {

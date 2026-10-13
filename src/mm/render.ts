@@ -121,10 +121,11 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     g.appendChild(image);
   }
 
+  const richX = n.side === "left" && n.depth > 0 ? n.width + 10 : -10;
   if (n.hasRich) {
     // left circle: show/hide DETAILS+NOTE preview (writes HIDDEN attr)
-    const richCircle = svgEl("circle", { class: "fp-rich-toggle", cx: -10, cy: Math.min(n.titleHeight, n.height) / 2, r: 7 });
-    const richSign = svgEl("text", { class: "fp-rich-sign", x: -10, y: Math.min(n.titleHeight, n.height) / 2 + 4, "text-anchor": "middle" });
+    const richCircle = svgEl("circle", { class: "fp-rich-toggle", cx: richX, cy: Math.min(n.titleHeight, n.height) / 2, r: 7 });
+    const richSign = svgEl("text", { class: "fp-rich-sign", x: richX, y: Math.min(n.titleHeight, n.height) / 2 + 4, "text-anchor": "middle" });
     richSign.textContent = n.richExpanded ? "↑" : "↓";
     richCircle.addEventListener("click", (e: MouseEvent) => { e.stopPropagation(); handlers.toggleRich(n.id); });
     g.appendChild(richCircle);
@@ -138,8 +139,8 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     if (n.hasDetails) types.push("DETAILS");
     if (n.hasNote) types.push("NOTE");
     for (const t of types) {
-      const c = svgEl("circle", { class: "fp-rich-edit", cx: -10, cy: ey, r: 7 });
-      const sign = svgEl("text", { class: "fp-rich-edit-sign", x: -10, y: ey + 3, "text-anchor": "middle" });
+      const c = svgEl("circle", { class: "fp-rich-edit", cx: richX, cy: ey, r: 7 });
+      const sign = svgEl("text", { class: "fp-rich-edit-sign", x: richX, y: ey + 3, "text-anchor": "middle" });
       sign.textContent = "→";
       c.addEventListener("click", (ev: MouseEvent) => { ev.stopPropagation(); handlers.editRich(n.id, t); });
       g.appendChild(c);
@@ -150,7 +151,7 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
 
   if (n.hasChildren) {
     // right circle: fold/unfold this node's children
-    const foldX = n.width + 10;
+    const foldX = n.side === "left" && n.depth > 0 ? -10 : n.width + 10;
     const fold = svgEl("circle", { class: "fp-fold", cx: foldX, cy: Math.min(n.titleHeight, n.height) / 2, r: 7 });
     const sign = svgEl("text", { class: "fp-fold-sign", x: foldX, y: Math.min(n.titleHeight, n.height) / 2 + 3, "text-anchor": "middle" });
     sign.textContent = n.folded ? "+" : "-";

@@ -1,3 +1,4 @@
+import { markdownLinkPattern, markdownLink } from "./markdownLinks";
 /** Markdown features stored as Freeplane XHTML. */
 export function tableCells(line: string): string[] {
   const cells: string[] = []; let cell = "", wiki = 0, code = false;
@@ -19,7 +20,7 @@ export function tableStart(lines: string[], i: number): boolean {
 }
 export function needsRichStorage(source: string): boolean {
   const lines = source.split("\n");
-  return /`/.test(source) || /~~[^\n]+?~~/.test(source) || lines.some((_, i) => tableStart(lines, i));
+  return Array.from(source.matchAll(markdownLinkPattern)).length > 0 || /`/.test(source) || /~~[^\n]+?~~/.test(source) || lines.some((_, i) => tableStart(lines, i));
 }
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 function inline(source: string): string {
@@ -30,8 +31,13 @@ function inline(source: string): string {
       return code ? '<code>' + escape(code[2]) + '</code>' : escape(part);
     }
     if (/^!?\[\[/.test(part)) return escape(part);
-    return escape(part).replace(/~~(.+?)~~/g, '<strike>$1</strike>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    const tokens: string[] = [];
+    const protectedText = part.replace(markdownLinkPattern, (_, label, href, title) => {
+      tokens.push('<a href="' + escape(href.replace(/^<|>$/g, '').replace(/^#fp-node:/, '#')) + '"' + (title ? ' title="' + escape(title) + '"' : '') + '>' + inline(label) + '</a>');
+      return '\u0001' + (tokens.length - 1) + '\u0002';
+    });
+    return escape(protectedText).replace(/~~(.+?)~~/g, '<strike>$1</strike>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>').replace(/\u0001(\d+)\u0002/g, (_, i) => tokens[Number(i)]);
   }).join("");
 }
 export function markdownHtml(source: string): string {
@@ -56,7 +62,12 @@ export function markdownHtml(source: string): string {
 }
 export function htmlMarkdown(body: Element): string {
   const walk = (node: Node): string => {
-    if (node.nodeType === 3 || node.nodeType === 4) return node.nodeValue || '';
+    if (node.nodeType === 3 || node.nodeType === 4) {
+      const value = node.nodeValue || '';
+      // Pretty-print indentation between blocks is not document content.
+      if (/^[ \t\r\n]*$/.test(value) && node.parentElement && Array.from(node.parentElement.children).some(c => /^(p|div|pre|table|body)$/i.test(c.tagName))) return '';
+      return value.replace(/[ \t\r\n]+/g, ' ');
+    }
     if (node.nodeType !== 1) return '';
     const el = node as Element, tag = el.nodeName.toLowerCase();
     const inner = () => Array.from(el.childNodes).map(walk).join('');
@@ -71,6 +82,7 @@ export function htmlMarkdown(body: Element): string {
       const marker = '`'.repeat(Math.max(1, ...Array.from(raw.matchAll(/`+/g), m => m[0].length + 1)));
       return marker + raw + marker;
     }
+    if (tag === 'a') return markdownLink(inner().trim(), el.getAttribute('href') || '');
     if (tag === 'table') {
       const rows = Array.from(el.querySelectorAll('tr')).map(row => Array.from(row.children).filter(c => /^(th|td)$/i.test(c.tagName)));
       if (!rows.length) return '';
@@ -84,7 +96,7 @@ export function htmlMarkdown(body: Element): string {
     if (/^(b|strong)$/.test(tag)) return '**' + inner() + '**';
     if (/^(i|em)$/.test(tag)) return '*' + inner() + '*';
     if (tag === 'br') return '\n';
-    if (tag === 'p' || tag === 'div') return inner() + '\n';
+    if (tag === 'p' || tag === 'div') return inner().replace(/^[ \t]+|[ \t]+$/g, '') + '\n';
     return inner();
   };
   return Array.from(body.childNodes).map(walk).join('').replace(/^\n|\n$/g, '');

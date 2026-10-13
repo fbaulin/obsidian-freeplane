@@ -1,6 +1,13 @@
 /** Toggle Markdown emphasis while keeping the selection inside its markers. */
 export function toggleEmphasis(input: HTMLTextAreaElement, marker: string) {
-  const { selectionStart: start, selectionEnd: end, value } = input;
+  const { value } = input;
+  let start = input.selectionStart, end = input.selectionEnd;
+  if (start === end) {
+    const word = /[\p{L}\p{N}\p{M}_]/u;
+    // Expand an empty selection to the word touching the caret.
+    while (start > 0 && word.test(value[start - 1])) start--;
+    while (end < value.length && word.test(value[end])) end++;
+  }
   const size = marker.length, selected = value.slice(start, end);
   let from = start, to = end, replacement = marker + selected + marker, offset = size;
   if (start >= size && value.slice(start - size, start) === marker && value.slice(end, end + size) === marker) {

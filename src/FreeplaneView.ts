@@ -121,9 +121,9 @@ export class FreeplaneView extends FileView {
     this.registerDomEvent(window, "keydown", (e: KeyboardEvent) => {
       if (this.app.workspace.activeLeaf !== this.leaf) return;
       if (e.target instanceof HTMLTextAreaElement && this.contentEl.contains(e.target)
-        && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^[bi]$/i.test(e.key)) {
+        && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === "KeyB" || e.code === "KeyI" || (!e.code && /^[bi]$/i.test(e.key)))) {
         e.preventDefault(); e.stopImmediatePropagation();
-        toggleEmphasis(e.target, e.key.toLowerCase() === "b" ? "**" : "*");
+        toggleEmphasis(e.target, (e.code === "KeyB" || (!e.code && e.key.toLowerCase() === "b")) ? "**" : "*");
         return;
       }
       const action = matchAction(e);
@@ -741,6 +741,7 @@ export class FreeplaneView extends FileView {
     this.areaSelecting.current = cur;
     if (!this.areaSelecting.moved && Math.hypot(cur.x - this.areaSelecting.start.x, cur.y - this.areaSelecting.start.y) < 4 / this.zoom) return;
     this.areaSelecting.moved = true;
+    this.updateAreaSelection();
     this.updateAreaSelectionOverlay();
   }
   updateAreaSelectionOverlay() {
@@ -760,12 +761,9 @@ export class FreeplaneView extends FileView {
     rect.setAttribute("width", String(Math.abs(a.current.x - a.start.x)));
     rect.setAttribute("height", String(Math.abs(a.current.y - a.start.y)));
   }
-  onAreaSelectEnd() {
+  updateAreaSelection() {
     const a = this.areaSelecting;
-    if (!a) return;
-    this.areaSelecting = null;
-    this.svg.querySelector("#fp-area-select")?.remove();
-    if (!a.moved || !this.layout) return;
+    if (!a?.moved || !this.layout) return;
     const x1 = Math.min(a.start.x, a.current.x), x2 = Math.max(a.start.x, a.current.x);
     const y1 = Math.min(a.start.y, a.current.y), y2 = Math.max(a.start.y, a.current.y);
     const selected = new Set<string>(a.base);
@@ -774,6 +772,16 @@ export class FreeplaneView extends FileView {
     }
     this.selectedIds = selected;
     if (!this.selectedId || !selected.has(this.selectedId)) this.selectedId = Array.from(selected).pop() || null;
+    // Update highlights without rebuilding the map or shifting its coordinates.
+    this.svg.querySelectorAll<SVGGElement>(".fp-node").forEach(node => node.classList.toggle("selected", selected.has(node.getAttribute("data-id") || "")));
+  }
+  onAreaSelectEnd() {
+    const a = this.areaSelecting;
+    if (!a) return;
+    this.updateAreaSelection();
+    this.areaSelecting = null;
+    this.svg.querySelector("#fp-area-select")?.remove();
+    if (!a.moved) return;
     this.suppressNextClick = true;
     this.renderAll();
   }
@@ -953,6 +961,7 @@ export class FreeplaneView extends FileView {
     menu.showAtMouseEvent(e);
   }
   openLink(href: string, newTab: boolean) {
+    if (/^#ID_/.test(href)) { this.revealNode(href.slice(1)); return; }
     if (href.startsWith("#fp-node:")) { this.revealNode(href.slice(9)); return; }
     if (/^(https?|mailto):/i.test(href)) { window.open(href, newTab ? "_blank" : "_self"); return; }
     // SVG wrapping may split a label into [[target|label]] fragments.
@@ -1503,13 +1512,15 @@ export class FreeplaneView extends FileView {
   }
   toggleRichPreview(id: string) {
     if (!this.doc) return;
-    const el = nodeById(this.doc, id);
-    if (!el) return;
-    const rcs = Array.from(el.children).filter((c) => c.nodeName.toLowerCase() === "richcontent" && (c.getAttribute("TYPE") === "DETAILS" || c.getAttribute("TYPE") === "NOTE"));
-    if (rcs.length === 0) return;
-    const showing = this.richExpanded.has(id);
+    const ids = this.selectedIds.has(id) ? Array.from(this.selectedIds) : [id];
+    const targets = ids.flatMap(selected => {
+      const el = nodeById(this.doc!, selected);
+      return el ? Array.from(el.children).filter(c => c.nodeName.toLowerCase() === "richcontent" && ["DETAILS", "NOTE"].includes(c.getAttribute("TYPE") || "")) : [];
+    });
+    if (!targets.length) return;
+    const showing = ids.some(selected => this.richExpanded.has(selected));
     const before = serializeDoc(this.doc);
-    rcs.forEach((rc) => { if (showing) rc.setAttribute("HIDDEN", "true"); else rc.removeAttribute("HIDDEN"); });
+    targets.forEach(rc => { if (showing) rc.setAttribute("HIDDEN", "true"); else rc.removeAttribute("HIDDEN"); });
     this.syncRichExpanded();
     this.selectedId = id;
     this.commit(before);
