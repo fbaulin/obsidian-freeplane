@@ -1,5 +1,7 @@
 export interface HotkeyBinding { modifiers: string[]; key: string; }
 export const DEFAULT_HOTKEYS: Record<string, HotkeyBinding[]> = {
+  "freeplane:replace": [{"modifiers": ["Shift"], "key": "f"}],
+  "freeplane:insert-math": [{"modifiers": ["Mod"], "key": "4"}],
   "freeplane:search": [{"modifiers": ["Mod"], "key": "f"}],
   "freeplane:search-next": [{"modifiers": [], "key": "n"}],
   "freeplane:search-previous": [{"modifiers": ["Shift"], "key": "n"}],
@@ -66,4 +68,15 @@ export function matchAction(e: KeyboardEvent): string | null {
     for (const b of list) if (b && eventMatches(e, b)) return id;
   }
   return null;
+}
+
+/** Migrate only the replacement shortcut shipped in the previous release. */
+export function migrateHotkeys(h: Record<string, HotkeyBinding[]>): boolean {
+  const old = h['freeplane:replace'];
+  if (old?.length !== 1 || old[0].key.toLowerCase() !== 'h' || old[0].modifiers.length !== 1 || old[0].modifiers[0] !== 'Mod') return false;
+  h['freeplane:replace'] = DEFAULT_HOTKEYS['freeplane:replace'].map(b => ({ ...b }));
+  const promote = h['freeplane:promote'];
+  if (promote?.length === 1 && promote[0].key === 'ArrowLeft' && promote[0].modifiers.length === 1 && promote[0].modifiers[0] === 'Mod')
+    h['freeplane:promote'] = DEFAULT_HOTKEYS['freeplane:promote'].map(b => ({ ...b }));
+  return true;
 }

@@ -217,11 +217,14 @@ function renderNode(n: any, selectedIds: Set<string>, handlers: any): SVGGElemen
     handlers.editText(n.id);
   });
 
-  // pointerdown = start drag (ignored on circles, links, preview lines)
+  // pointerdown = start drag (including link text; ignored on circles and preview lines)
   g.addEventListener("pointerdown", (e: PointerEvent) => {
     const target = e.target as Element;
+    if (target.closest?.("a, .fp-rich-link")) {
+      if (e.button === 0) { e.stopPropagation(); handlers.startDrag(n.id, e); }
+      return;
+    }
     if (target.closest?.(".fp-rich-line")) return;
-    if (target.closest && (target.closest(".fp-md a") || target.closest(".fp-rich-link"))) return;
     if (target.classList && (
       target.classList.contains("fp-fold") ||
       target.classList.contains("fp-rich-toggle") ||

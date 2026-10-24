@@ -479,3 +479,7 @@
 .fp-node-scroll-content { display: block; overflow: visible; }
 .fp-md pre { max-width: 100%; white-space: pre; overflow-x: auto; }
 .fp-md code { font-family: var(--font-monospace); }
+
+.fp-search-bar { flex-wrap: wrap; }
+.fp-replace-row { order: 10; flex-basis: 100%; gap: 6px; }
+.fp-search-bar button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }

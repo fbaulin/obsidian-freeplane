@@ -1,4 +1,5 @@
 export interface FpSettings {
+  searchIndexFolder: string;
   nodeMaxWidthSymbols: number;
   nodeMaxHeightLines: number;
   touchpadPanSpeed: number;
@@ -9,6 +10,7 @@ export interface FpSettings {
   detailsFontSize: number;
 }
 export const DEFAULT_SETTINGS: FpSettings = {
+  searchIndexFolder: "Freeplane search index",
   nodeMaxWidthSymbols: 50,
   nodeMaxHeightLines: 20,
   touchpadPanSpeed: 1,
@@ -19,21 +21,27 @@ export const DEFAULT_SETTINGS: FpSettings = {
   detailsFontSize: 12
 };
 export const settings: FpSettings = { ...DEFAULT_SETTINGS };
-export const SETTING_FIELDS: { key: keyof FpSettings; name: string; min: number; max: number; step: number; desc: string }[] = [
+export const SETTING_FIELDS: { key: Exclude<keyof FpSettings, "searchIndexFolder">; name: string; min: number; max: number; step: number; desc: string }[] = [
   { key: "nodeMaxWidthSymbols", name: "Node wrap width", min: 8, max: 300, step: 1, desc: "Maximum characters per wrapped line." },
   { key: "nodeMaxHeightLines", name: "Maximum node height", min: 3, max: 200, step: 1, desc: "Visible height in lines; longer nodes scroll. Default: 20." },
   { key: "detailsFontSize", name: "Details font size", min: 6, max: 32, step: 0.5, desc: "Pixels at 100% zoom, for viewing and editing. Node text is 13 px." },
   { key: "editingPanelButtonSize", name: "Editing panel button size", min: 16, max: 96, step: 1, desc: "Button width and height in pixels." },
   ...(["touchpad", "touchscreen"] as const).flatMap(device => (["Pan", "Zoom"] as const).map(action => ({
-    key: `${device}${action}Speed` as keyof FpSettings,
+    key: `${device}${action}Speed` as Exclude<keyof FpSettings, "searchIndexFolder">,
     name: `${device === "touchpad" ? "Touchpad" : "Touchscreen"} ${action.toLowerCase()} speed`,
     min: 0.1, max: 10, step: 0.1, desc: "Speed multiplier; 1 is the default."
   })))
 ];
 export function applySettings(p: Partial<FpSettings>) {
   Object.assign(settings, DEFAULT_SETTINGS);
+  if (typeof p.searchIndexFolder === "string" && validIndexFolder(p.searchIndexFolder.trim())) settings.searchIndexFolder = p.searchIndexFolder.trim();
   for (const field of SETTING_FIELDS) {
     const value = Number(p[field.key]);
     if (p[field.key] != null && Number.isFinite(value)) settings[field.key] = Math.max(field.min, Math.min(field.max, value));
   }
+}
+
+export function validIndexFolder(name: string): boolean {
+  return !!name && name === name.trim() && !/[\\/:*?"<>|\x00-\x1f]/.test(name)
+    && !name.startsWith('.') && !name.endsWith('.') && !/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name);
 }

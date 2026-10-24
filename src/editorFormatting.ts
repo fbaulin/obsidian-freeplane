@@ -19,3 +19,11 @@ export function toggleEmphasis(input: HTMLTextAreaElement, marker: string) {
   input.setSelectionRange(from + offset, from + replacement.length - offset);
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
+
+/** Wrap selection or caret; repeating inside $...$ promotes it to $$...$$. */
+export function insertMath(input: HTMLTextAreaElement) {
+  const start = input.selectionStart, end = input.selectionEnd;
+  input.setRangeText('$' + input.value.slice(start, end) + '$', start, end, 'end');
+  input.setSelectionRange(start + 1, end + 1);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}

@@ -1,4 +1,6 @@
-import { toggleEmphasis } from "./editorFormatting";
+import { searchPattern, SearchOptions } from "./searchReplace";
+import { wikiLabel } from "./mm/md";
+import { toggleEmphasis, insertMath } from "./editorFormatting";
 import { characterLimitPixels, textPixels } from "./mm/textMetrics";
 import { branchSide } from "./mm/xml";
 import { nodeTextSource } from "./mm/xml";
@@ -50,6 +52,9 @@ export class FreeplaneView extends FileView {
   sidebarEl!: HTMLElement;
   panelUpdate: (() => void) | null = null;
   searchQuery = "";
+  searchOptions: SearchOptions = { regex: false, caseSensitive: false, wholeWord: false };
+  replaceRow: HTMLElement | null = null;
+  replaceInput: HTMLInputElement | null = null;
   editingPanel: HTMLElement | null = null;
   editingPanelEnabled = false;
   touchMoveMode = false;
@@ -127,7 +132,14 @@ export class FreeplaneView extends FileView {
         return;
       }
       const action = matchAction(e);
-      if (this.isEditableTarget(e.target) && !(action === "freeplane:update-panel" && this.sidebarEl.contains(e.target as Node))) return;
+      if (action === "freeplane:insert-math") {
+        if (e.target instanceof HTMLTextAreaElement && this.contentEl.contains(e.target)) {
+          e.preventDefault(); e.stopImmediatePropagation(); insertMath(e.target);
+        }
+        return;
+      }
+      if (this.isEditableTarget(e.target) && !(action === "freeplane:update-panel" && this.sidebarEl.contains(e.target as Node))
+        && !((action === "freeplane:search" || action === "freeplane:replace") && this.searchBar?.contains(e.target as Node))) return;
       if (!action) return;
       e.preventDefault();
       e.stopPropagation();
@@ -294,6 +306,7 @@ export class FreeplaneView extends FileView {
       case "freeplane:rename-start": if (this.selectedId) this.startTextEdit(this.selectedId, "start"); break;
       case "freeplane:rename-select-all": if (this.selectedId) this.startTextEdit(this.selectedId, "all"); break;
       case "freeplane:fold-subtree": this.toggleSubtree(); break;
+      case "freeplane:replace": this.openSearchBar(true); break;
       case "freeplane:search": this.openSearchBar(); break;
       case "freeplane:search-next": this.searchNode(1); break;
       case "freeplane:search-previous": this.searchNode(-1); break;
@@ -589,6 +602,10 @@ export class FreeplaneView extends FileView {
       div.innerHTML = "";
       try { await (MarkdownRenderer as any).render(this.app, markdown, div, source, comp); }
       catch { div.textContent = n.text; }
+      div.querySelectorAll<HTMLAnchorElement>("a.internal-link").forEach(link => {
+        const href = link.getAttribute("data-href") || link.getAttribute("href") || "";
+        if (/#page=[^#|&]+/.test(href) && !link.classList.contains("is-aliased")) link.textContent = wikiLabel(href);
+      });
     }));
     if (token !== this.mdPass) { this.removeChild(comp); return; }
     const old = this.mdComponent;
@@ -665,7 +682,7 @@ export class FreeplaneView extends FileView {
     } else if (this.touchMoveMode && !this.isEditableTarget(e.target)) {
       const target = e.target as Element;
       const node = target.closest(".fp-node");
-      if (node && !target.closest("a, .fp-rich-link, .fp-fold, .fp-rich-toggle, .fp-rich-edit")) {
+      if (node && !target.closest(".fp-fold, .fp-rich-toggle, .fp-rich-edit")) {
         e.preventDefault();
         this.touchEditId = node.getAttribute("data-id");
         const t = e.touches[0];
@@ -1765,8 +1782,8 @@ export class FreeplaneView extends FileView {
     this.dragging = null; this.dropHint = null;
     this.canvasEl.removeClass("fp-dragging");
     this.updateDropOverlay();
+    if (drag.started) this.suppressNextClick = true;
     if (!drag.started || !hint || !this.doc) return;
-    this.suppressNextClick = true;
     if (drag.ids.includes(hint.id)) return;
     const before = serializeDoc(this.doc);
     const ordered = [...drag.els].sort((a: Element, b: Element) =>
@@ -1999,6 +2016,10 @@ export class FreeplaneView extends FileView {
 
       const choice = await askRecovery(this.app, file.name);
 
+      if (choice === "resume") {
+        return { xml: env.xml, undo: env.undo || [], redo: env.redo || [], dirty: true, mmText: text };
+      }
+
       if (choice === "overwrite") {
         await this.app.vault.modify(file, env.xml);
         await deleteRecovery(adapter, dir, key);
@@ -2057,12 +2078,21 @@ export class FreeplaneView extends FileView {
   }
 
   attachSuggest(input: any) { new LinkSuggest(this, input); }
-  openSearchBar() {
+  openSearchBar(replace = false) {
     if (!this.searchBar) {
       this.contentEl.style.position = "relative";
       this.searchBar = this.contentEl.createDiv({ cls: "fp-search-bar" });
       this.searchInput = this.searchBar.createEl("input", { type: "text", placeholder: "Search map", value: this.searchQuery });
       this.searchInput.setAttribute("aria-label", "Search map");
+      for (const [key, label] of [["regex", ".*"], ["caseSensitive", "Aa"], ["wholeWord", "Word"]] as const) {
+        const toggle = this.searchBar.createEl("button", { text: label, attr: { "aria-label": key, "aria-pressed": "false" } });
+        toggle.onclick = () => { this.searchOptions[key] = !this.searchOptions[key]; toggle.setAttribute("aria-pressed", String(this.searchOptions[key])); this.searchQuery = this.searchInput!.value; this.searchNode(1, true); };
+      }
+      this.replaceRow = this.searchBar.createDiv({ cls: "fp-replace-row" });
+      this.replaceInput = this.replaceRow.createEl("input", { type: "text", placeholder: "Replace with" });
+      this.replaceRow.createEl("button", { text: "Replace" }).onclick = () => this.replaceMatches(false);
+      this.replaceRow.createEl("button", { text: "Replace all" }).onclick = () => this.replaceMatches(true);
+      this.replaceInput.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); this.replaceMatches(false); } };
       this.searchCount = this.searchBar.createSpan({ text: "0/0" });
       const prev = this.searchBar.createEl("button", { text: "←", attr: { "aria-label": "Previous match" } });
       const next = this.searchBar.createEl("button", { text: "→", attr: { "aria-label": "Next match" } });
@@ -2077,18 +2107,59 @@ export class FreeplaneView extends FileView {
       };
     }
     this.searchBar.style.display = "flex";
+    this.replaceRow!.style.display = replace ? "flex" : "none";
     this.searchInput!.focus(); this.searchInput!.select();
   }
   searchNode(direction: number, first = false) {
-    const query = this.searchQuery.trim().toLocaleLowerCase();
+    const query = this.searchQuery;
     if (!query || !this.doc) { if (this.searchCount) this.searchCount.textContent = "0/0"; return; }
+    let pattern: RegExp;
+    try { pattern = searchPattern(query, this.searchOptions); }
+    catch { if (this.searchCount) this.searchCount.textContent = "Invalid regex"; return; }
     const hits = Array.from(this.doc.querySelectorAll("node")).filter(el =>
-      [nodeTextSource(el), richContentSource(el, "DETAILS"), richContentSource(el, "NOTE")].join("\n").toLocaleLowerCase().includes(query));
+      [nodeTextSource(el), richContentSource(el, "DETAILS"), richContentSource(el, "NOTE")].some(text => pattern.test(text)));
     if (!hits.length) { if (this.searchCount) this.searchCount.textContent = "0/0"; return; }
     const current = hits.findIndex(el => el.getAttribute("ID") === this.selectedId);
-    const index = first || current < 0 ? (direction > 0 ? 0 : hits.length - 1) : (current + direction + hits.length) % hits.length;
+    const index = first || current < 0 ? (direction >= 0 ? 0 : hits.length - 1) : (current + direction + hits.length) % hits.length;
     this.revealNode(hits[index].getAttribute("ID") || "");
     if (this.searchCount) this.searchCount.textContent = `${index + 1}/${hits.length}`;
+  }
+  replaceMatches(all: boolean) {
+    if (!this.doc) return;
+    this.searchQuery = this.searchInput?.value || "";
+    if (!this.searchQuery) return;
+    let pattern: RegExp;
+    try { pattern = searchPattern(this.searchQuery, this.searchOptions, all); }
+    catch { if (this.searchCount) this.searchCount.textContent = "Invalid regex"; return; }
+    const before = serializeDoc(this.doc), draft = parseMm(before);
+    const nodes = all ? Array.from(draft.querySelectorAll("node")) : [nodeById(draft, this.selectedId || "")].filter((n): n is Element => !!n);
+    let count = 0;
+    try {
+      for (const node of nodes) {
+        for (const type of ["NODE", "DETAILS", "NOTE"]) {
+          if (!all && count) break;
+          const source = type === "NODE" ? nodeTextSource(node) : richContentSource(node, type);
+          pattern.lastIndex = 0;
+          if (!pattern.test(source)) continue;
+          pattern.lastIndex = 0;
+          const replacement = this.replaceInput?.value || "";
+          const updated = this.searchOptions.regex ? source.replace(pattern, replacement) : source.replace(pattern, () => replacement);
+          if (updated === source) continue;
+          if (type === "NODE") setText(node, updated);
+          else {
+            const old = Array.from(node.children).find(c => c.getAttribute("TYPE") === type);
+            const hidden = old?.getAttribute("HIDDEN");
+            setRichContent(draft, node, type, updated);
+            if (hidden) Array.from(node.children).find(c => c.getAttribute("TYPE") === type)?.setAttribute("HIDDEN", hidden);
+          }
+          count++;
+        }
+      }
+    } catch (error) { if (this.searchCount) this.searchCount.textContent = "Replacement failed"; return; }
+    if (count) { this.doc = draft; this.mdSizes = {}; this.syncRichExpanded(); this.commit(before); }
+    if (all) this.searchNode(1, true);
+    else if (!count) this.searchNode(1);
+    else this.searchNode(0);
   }
   revealNode(id: string) {
     if (!this.doc) return;
@@ -2122,7 +2193,7 @@ class LinkSuggest {
     if (e.key === "ArrowDown") { e.preventDefault(); e.stopImmediatePropagation(); this.move(1); return true; }
     if (e.key === "ArrowUp") { e.preventDefault(); e.stopImmediatePropagation(); this.move(-1); return true; }
     if (e.key === "Enter" || e.key === "Tab") {
-      if (this.items.length) { e.preventDefault(); e.stopImmediatePropagation(); this.accept(this.items[this.index]); return true; }
+      if (this.items.length) { e.preventDefault(); e.stopImmediatePropagation(); this.accept(this.items[this.index], e.key === "Tab" && e.shiftKey); return true; }
       this.close(); return false;
     }
     if (e.key === "Escape") { e.stopImmediatePropagation(); this.close(); return true; }
@@ -2179,13 +2250,13 @@ class LinkSuggest {
     });
     this.open = true;
   }
-  accept(f: any) {
+  accept(f: any, page = false) {
     const insert = f.nodeId ? `[${this.label(f).replace(/[\[\]\n]/g, " ")}](#fp-node:${f.nodeId})`
-      : (this.embed ? "![[" : "[[") + this.label(f) + "]]";
+      : (this.embed ? "![[" : "[[") + this.label(f) + (page ? "#page=" : "") + "]]";
     const v = this.input.value;
     const caret = this.input.selectionStart ?? this.partialEnd;
-    this.input.value = v.slice(0, this.matchStart) + insert + v.slice(caret);
-    const pos = this.matchStart + insert.length;
+    this.input.value = v.slice(0, this.matchStart) + insert + v.slice(caret + (!f.nodeId && v.slice(caret, caret + 2) === "]]" ? 2 : 0));
+    const pos = this.matchStart + insert.length - (page && !f.nodeId ? 2 : 0);
     this.input.setSelectionRange(pos, pos);
     this.input.focus();
     this.input.dispatchEvent(new Event("input", { bubbles: true }));

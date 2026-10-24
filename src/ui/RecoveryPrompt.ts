@@ -3,11 +3,11 @@
  * Modal shown when a .tmp stash exists but the .mm changed on disk since
  * the stash was written. Choices: overwrite the mm with recovered content,
  * keep recovered content as a separate new mm, or lose the recovered
- * changes. Closing with Esc/X resolves "saveas" (the non-destructive option).
+ * changes. Closing with Esc/X resumes the recovered work without deleting its stash.
  */
 import { Modal } from "obsidian";
 
-export type RecoveryChoice = "overwrite" | "saveas" | "lose";
+export type RecoveryChoice = "overwrite" | "saveas" | "lose" | "resume";
 
 export function askRecovery(app: any, fileName: string): Promise<RecoveryChoice> {
   return new Promise((resolve) => {
@@ -33,13 +33,15 @@ class RecoveryModal extends Modal {
       text: "Unsaved changes for \"" + this.fileName + "\" were stashed, but the .mm file changed on disk since. Choose what to do:"
     });
     const buttons = this.contentEl.createDiv({ cls: "modal-button-container" });
+    const resume = buttons.createEl("button", { text: "Continue editing recovered" });
+    resume.onclick = () => this.choose("resume");
     const ow = buttons.createEl("button", { text: "Overwrite .mm", cls: "mod-warning" });
     const sa = buttons.createEl("button", { text: "Save as new file", cls: "mod-cta" });
     const lo = buttons.createEl("button", { text: "Lose changes" });
     ow.onclick = () => this.choose("overwrite");
     sa.onclick = () => this.choose("saveas");
     lo.onclick = () => this.choose("lose");
-    this.contentEl.createEl("p", { text: "Esc = Save as new file (safe)." }).style.color = "var(--text-faint)";
+    this.contentEl.createEl("p", { text: "Esc = Continue editing recovered; recovery is kept." }).style.color = "var(--text-faint)";
   }
 
   choose(c: RecoveryChoice) {
@@ -50,7 +52,7 @@ class RecoveryModal extends Modal {
   }
 
   onClose() {
-    if (!this.done) { this.done = true; this.resolve("saveas"); }  // safe default
+    if (!this.done) { this.done = true; this.resolve("resume"); }  // safe default
     this.contentEl.empty();
   }
 }

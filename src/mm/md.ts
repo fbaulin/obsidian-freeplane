@@ -19,5 +19,12 @@ export function toMarkdown(text: string): string {
 
 export function wikiLabel(target: string): string {
   const parts = target.split("|");
+  if (parts.length === 1) {
+    const page = /#page=([^#|&]+)/.exec(target);
+    if (page) {
+      const name = target.split("#")[0].split("/").pop() || "";
+      return name.replace(/\.[^.]+$/, "") + ", p." + page[1];
+    }
+  }
   return parts.length > 1 ? parts.slice(1).join("|") : (target.split("/").pop() || target);
 }

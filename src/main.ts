@@ -5,12 +5,12 @@ import { renamedLinks } from "./renameLinks";
 import { installSearchIndex } from "./searchIndex";
 import { serializeDoc, parseMm } from "./mm/xml";
 import { FreeplaneView, VIEW_TYPE_FREEPLANE } from "./FreeplaneView";
-import { readCache, writeCache } from "./recovery";
-import { applySettings, DEFAULT_SETTINGS, settings, SETTING_FIELDS, FpSettings } from "./settings";
-import { setHotkeys, HOTKEYS_FILE_DEFAULT, DEFAULT_HOTKEYS } from "./hotkeys";
+import { applySettings, DEFAULT_SETTINGS, settings, SETTING_FIELDS, FpSettings, validIndexFolder } from "./settings";
+import { setHotkeys, HOTKEYS_FILE_DEFAULT, DEFAULT_HOTKEYS, migrateHotkeys } from "./hotkeys";
 
 export default class FreeplanePlugin extends Plugin {
   renameQueue: Promise<void> = Promise.resolve();
+  changeSearchIndexFolder: (name: string) => Promise<void>;
   settingsQueue: Promise<void> = Promise.resolve();
   async onload() {
     this.registerView(VIEW_TYPE_FREEPLANE, (leaf) => new FreeplaneView(leaf, this));
@@ -35,10 +35,10 @@ export default class FreeplanePlugin extends Plugin {
     // settings.json + hotkeys.json from the plugin folder (created if missing)
     await this.loadConfigFiles();
     this.addSettingTab(new FreeplaneSettingsTab(this));
-    await this.cleanupRecovery();
+    // Never prune recovery at startup: the vault index/sync may be incomplete.
     installLinkIndex(this);
     installMapOutgoingLinks(this);
-    installSearchIndex(this);
+    this.changeSearchIndexFolder = installSearchIndex(this);
 
     this.registerEvent(
       (this.app.workspace as any).on("file-menu", (menu: any, file: any) => {
@@ -84,20 +84,29 @@ export default class FreeplanePlugin extends Plugin {
       if (await adapter.exists(hp)) {
         const json = (await adapter.read(hp)).split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
         const loaded = JSON.parse(json);
+        const migrated = migrateHotkeys(loaded);
         setHotkeys(loaded);
-        if (Object.keys(DEFAULT_HOTKEYS).some(key => !(key in loaded)))
+        if (migrated || Object.keys(DEFAULT_HOTKEYS).some(key => !(key in loaded)))
           await adapter.write(hp, JSON.stringify({ ...DEFAULT_HOTKEYS, ...loaded }, null, 2) + "\n");
       } else await adapter.write(hp, HOTKEYS_FILE_DEFAULT);
     } catch (e) { console.error("Freeplane: hotkeys.json", e); }
   }
 
-  saveSetting(key: keyof FpSettings, value: number) {
+  saveSetting<K extends keyof FpSettings>(key: K, value: FpSettings[K]) {
     this.settingsQueue = this.settingsQueue.catch(() => {}).then(async () => {
       const path = `${this.manifest.dir}/settings.json`;
       const adapter = this.app.vault.adapter;
       const existing = await adapter.exists(path) ? JSON.parse(await adapter.read(path)) : {};
       const next = { ...existing, ...settings, [key]: value };
-      await adapter.write(path, JSON.stringify(next, null, 2) + "\n");
+      if (key === "searchIndexFolder") {
+        if (!validIndexFolder(String(value))) throw new Error("Enter a valid folder name without slashes or reserved characters.");
+        await this.changeSearchIndexFolder(String(value));
+      }
+      try { await adapter.write(path, JSON.stringify(next, null, 2) + "\n"); }
+      catch (error) {
+        if (key === "searchIndexFolder") await this.changeSearchIndexFolder(settings.searchIndexFolder);
+        throw error;
+      }
       applySettings(next);
       for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FREEPLANE)) {
         const view = leaf.view as FreeplaneView;
@@ -126,29 +135,7 @@ export default class FreeplanePlugin extends Plugin {
     await this.app.workspace.getLeaf(false).openFile(file);
   }
 
-  /** Drop recovery entries (tmp + cache) whose .mm no longer exists. */
-  async cleanupRecovery() {
-    try {
-      const dir = (this.manifest as any).dir || "";
-      const adapter = this.app.vault.adapter;
-      const cache = await readCache(adapter, dir);
-      let changed = false;
-      for (const key of Object.keys(cache)) {
-        const entry = cache[key];
-        if (!entry || !entry.mmPath || !this.app.vault.getAbstractFileByPath(entry.mmPath)) {
-          delete cache[key];
-          changed = true;
-          try {
-            const tmp = dir + "/recovery/" + key + ".tmp";
-            if (await adapter.exists(tmp)) await adapter.remove(tmp);
-          } catch {}
-        }
-      }
-      if (changed) await writeCache(adapter, dir, cache);
-    } catch (e) {
-      console.error("Freeplane: recovery cleanup failed", e);
-    }
-  }
+
 
   onunload() { this.app.workspace.detachLeavesOfType(VIEW_TYPE_FREEPLANE); }
 }
@@ -158,6 +145,16 @@ class FreeplaneSettingsTab extends PluginSettingTab {
   display() {
     this.containerEl.empty();
     this.containerEl.createEl("p", { text: "Changes apply immediately and are saved to settings.json." });
+    new Setting(this.containerEl).setName("Search index folder")
+      .setDesc("Vault-root folder for generated search notes. Changing this renames the existing folder; choose an unused name.")
+      .addText(text => {
+        text.setValue(settings.searchIndexFolder);
+        text.inputEl.addEventListener("change", async () => {
+          const name = text.getValue().trim();
+          try { await this.owner.saveSetting("searchIndexFolder", name); text.setValue(settings.searchIndexFolder); }
+          catch (e) { new Notice(e instanceof Error ? e.message : "Could not change index folder."); text.setValue(settings.searchIndexFolder); }
+        });
+      });
     for (const field of SETTING_FIELDS) {
       new Setting(this.containerEl).setName(field.name).setDesc(field.desc).addText(text => {
         const input = text.inputEl;

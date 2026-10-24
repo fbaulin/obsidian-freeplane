@@ -218,3 +218,20 @@ or a new tab preserves heading and PDF page references.
 
 Run `node tests/regressions.cjs` after installing build dependencies (requires
 Python 3 for the XML parsing fixtures).
+
+### Search, replacement and page links
+
+- Shift+F (`freeplane:replace` in hotkeys.json) opens replacement in the top search bar. Ctrl+F opens search. Ctrl+H and Ctrl+Left promote nodes.
+- Search supports regular expressions (`.*`), case sensitivity (`Aa`), and Unicode whole words (`Word`). Invalid patterns show an inline error. Search includes node text, details and notes.
+- Enter selects the first matching node; arrows navigate matching nodes. Replace changes the first occurrence in the selected node; Replace all changes all occurrences throughout the map in one undoable action. Regex replacement supports capture groups (`$1`, `$2`); ordinary replacement treats these literally.
+- In file suggestions, Tab completes the link; Shift+Tab inserts `#page=` and leaves the caret before `]]`. Unaliased page links display as `Name, p.2`, with the destination unchanged.
+- Nodes can be dragged by link text. Ordinary clicks select; Ctrl+click opens the link.
+
+### Recovery and math editing
+
+Ctrl+4 (`freeplane:insert-math` in hotkeys.json) wraps selected text or the caret in dollar signs; pressing twice creates double-dollar delimiters. Works in node, details and notes textareas.
+Recovery files are never pruned at startup, including for temporarily missing maps. Closing a recovery-conflict prompt resumes the recovered draft and preserves its stash. Recovery is removed after successful save/save-as or explicit discard. This does not guarantee preservation of unfinished editor text or changes during the recovery debounce interval if the process is killed.
+
+### Search index folder
+
+Settings → Freeplane Mind Map → Search index folder renames the existing index folder immediately. Use an unused vault-root folder name. The value is saved as `searchIndexFolder` in settings.json (default: `Freeplane search index`). Editing JSON directly takes effect after plugin reload but does not rename the old folder; use the settings UI to move the existing index.
